@@ -12,6 +12,7 @@
   - [Options](#Options)
 - [Sample Buildkite Pipeline](#Sample-Buildkite-Pipelines)
   - [Cloning repos via SSH](#Cloning-repos-via-SSH)
+  - [Cloning repos via HTTPS](#Cloning-repos-via-HTTPS)
   - [Pod Spec Patch](#Pod-Spec-Patch)
   - [Sidecars](#Sidecars)
   - [Extra volume mounts](#Extra-volume-mounts)
@@ -36,6 +37,7 @@ When a job is available, the controller will create a pod to acquire and run the
 
 - adding an init container to:
   - copy the agent binary onto the workspace volume
+  - check that other container images pull successfully before starting
 - adding a container to run the buildkite agent
 - adding a container to clone the source repository
 - modifying the user-specified containers to:
@@ -126,7 +128,7 @@ Flags:
   -f, --config string                              config file path
       --debug                                      debug logs
   -h, --help                                       help for agent-stack-k8s
-      --image string                               The image to use for the Buildkite agent (default "ghcr.io/buildkite/agent:3.75.1")
+      --image string                               The image to use for the Buildkite agent (default "ghcr.io/buildkite/agent:3.78.0")
       --image-pull-backoff-grace-period duration   Duration after starting a pod that the controller will wait before considering cancelling a job due to ImagePullBackOff (e.g. when the podSpec specifies container images that cannot be pulled) (default 30s)
       --job-ttl duration                           time to retain kubernetes jobs after completion (default 10m0s)
       --max-in-flight int                          max jobs in flight, 0 means no max (default 25)
@@ -196,14 +198,33 @@ steps:
         containers:
         - image: alpine:latest
           command:
-          - echo
-          - Hello World!
+          - echo Hello World!
 ```
-Note that in a `podSpec`, a `command` should be YAML list that will be combined into a single command for a container to run.
 
 Almost any container image may be used, but it MUST have a POSIX shell available to be executed at `/bin/sh`.
 
-It's also possible to specify an entire script as a `command`
+### PodSpec command and args interpretation
+
+In a `podSpec`, `command` **must** be a list of strings, since it is [defined by Kubernetes](https://kubernetes.io/docs/reference/kubernetes-api/workload-resources/pod-v1/#entrypoint).
+However, agent-stack-k8s runs buildkite-agent instead of the container's default entrypoint.
+To run the command you want, it must _re-interpret_ `command` into input for buildkite-agent.
+By default, it treats `command` as a sequence of multiple commands, similar to a pipeline.yaml
+`steps: commands: ...`.
+This is different to Kubernetes' interpretation of `command` (as an entrypoint vector run without a
+shell as a single command).
+
+This "interposer" behaviour can be changed using `commandParams/interposer`:
+
+* `buildkite` is the default, in which agent-stack-k8s treats `command` as a sequence of multiple
+  commands and `args` as extra arguments added to the end of the last command, which is then
+  typically interpreted by the shell.
+* `vector` emulates the Kubernetes interpretation in which `command` and `args` specify components
+  of a single command intended to be run directly.
+* `legacy` is the 0.14.0 and earlier behaviour in which `command` and `args` were joined directly
+  into a single command with spaces.
+
+`buildkite` example:
+
 ```yaml
 steps:
 - label: Hello World!
@@ -211,19 +232,47 @@ steps:
     queue: kubernetes
   plugins:
   - kubernetes:
+      commandParams:
+        interposer: buildkite  # This is the default, and can be omitted.
       podSpec:
         containers:
         - image: alpine:latest
           command:
+          - set -euo pipefail
+          - |-       # <-- YAML block scalars work too
+            echo Hello World! > hello.txt
+            cat hello.txt | buildkite-agent annotate
+```
+
+If you have a multi-line `command`, specifying the `args` as well could lead to confusion, so we
+recommend just using `command`.
+
+`vector` example:
+
+```yaml
+steps:
+- label: Hello World!
+  agents:
+    queue: kubernetes
+  plugins:
+  - kubernetes:
+      commandParams:
+        interposer: vector
+      podSpec:
+        containers:
+        - image: alpine:latest
+          command: ['sh']
+          args:
+          - '-c'
           - |-
-            set -euo pipefail
+            set -eu
 
             echo Hello World! > hello.txt
             cat hello.txt | buildkite-agent annotate
 ```
-If you have a multi-line `command`, specifying the `args` as well could lead to confusion, so we recommend just using `command`.
 
-More samples can be found in the [integration test fixtures directory](internal/integration/fixtures).
+More samples can be found in the
+[integration test fixtures directory](internal/integration/fixtures).
 
 ### Cloning repos via SSH
 
@@ -265,6 +314,104 @@ steps:
                 args:
                   - jib
                   - --image=ttl.sh/example:1h
+```
+
+### Cloning repos via HTTPS
+
+To use HTTPS to clone private repos, you can use a `.git-credentials` file stored in a secret, and
+refer to this secret using the `gitCredentialsSecret` checkout parameter.
+
+By default, this secret is only attached, and Git is only configured to use it, within the
+`checkout` container. It will not necessarily be available in your job containers.
+If you need the `.git-credentials` file inside the other containers as well, you can add a volume
+mount for the `git-credentials` volume, and configure Git to use the file within it (e.g. with
+`git config credential.helper 'store --file ...'`)
+
+#### Example secret creation for HTTPS cloning
+Once again, this example is illustrative only.
+
+First, create a Kubernetes secret containing the key `.git-credentials`, formatted in the manner
+expected by [the `store` Git credendial helper](https://git-scm.com/docs/git-credential-store):
+
+```bash
+kubectl create secret generic my-git-credentials --from-file='.git-credentials'="$HOME/.git-credentials"
+```
+
+Then you can use the `checkout/gitCredentialsSecret` (in your pipeline) or
+`default-checkout-params/gitCredentialsSecret` (in values.yaml) to reference the secret volume
+source:
+
+```yaml
+# pipeline.yaml
+steps:
+  - label: build image
+    agents:
+      queue: kubernetes
+    plugins:
+      - kubernetes:
+          checkout:
+            gitCredentialsSecret:
+              secretName: my-git-credentials # <----
+          podSpec:
+            ...
+```
+
+```yaml
+# values.yaml
+...
+default-checkout-params:
+  gitCredentialsSecret:
+    secretName: my-git-credentials
+...
+```
+
+If you wish to use a different key within the secret than `.git-credentials`, you can
+[project it](https://kubernetes.io/docs/tasks/inject-data-application/distribute-credentials-secure/#project-secret-keys-to-specific-file-paths)
+to `.git-credentials` by using `items` within `gitCredentialsSecret`.
+
+```yaml
+# values.yaml
+...
+default-checkout-params:
+  gitCredentialsSecret:
+    secretName: my-git-credentials
+    items:
+    - key: funky-creds
+      path: .git-credentials
+...
+```
+
+### Default job metadata
+agent-stack-k8s can automatically add labels and annotations to the Kubernetes jobs it creates.
+Default labels and annotations can be set in `values.yaml` with `default-metadata`, e.g.:
+
+```yaml
+# config.yaml / values.yaml
+...
+default-metadata:
+  annotations:
+    imageregistry: "https://hub.docker.com/"
+    mycoolannotation: llamas
+  labels:
+    argocd.argoproj.io/tracking-id: example-id-here
+    mycoollabel: alpacas
+```
+
+Similarly they can be set for each step in a pipeline individually using the kubernetes plugin,
+e.g.:
+
+```yaml
+# pipeline.yaml
+...
+  plugins:
+    - kubernetes:
+        metadata:
+          annotations:
+            imageregistry: "https://hub.docker.com/"
+            mycoolannotation: llamas
+          labels:
+            argocd.argoproj.io/tracking-id: example-id-here
+            mycoollabel: alpacas
 ```
 
 
@@ -412,13 +559,33 @@ Sidecar containers can be added to your job by specifying them under the top-lev
 
 There is no guarantee that your sidecars will have started before your job, so using retries or a tool like [wait-for-it](https://github.com/vishnubob/wait-for-it) is a good idea to avoid flaky tests.
 
+### The workspace volume
+
+By default the workspace directory (`/workspace`) is mounted as an `emptyDir` ephemeral volume. Other volumes may be more desirable (e.g. a volume claim backed by an NVMe device).
+The default workspace volume can be set as stack configuration, e.g.
+
+```yaml
+# values.yaml
+config:
+  workspace-volume:
+    name: workspace-2-the-reckoning
+    ephemeral:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          storageClassName: my-special-storage-class
+          resources:
+            requests:
+              storage: 1Gi
+```
+
 ### Extra volume mounts
 
 In some situations, for example if you want to use [git mirrors](https://buildkite.com/docs/agent/v3#promoted-experiments-git-mirrors) you may want to attach extra volume mounts (in addition to the `/workspace` one) in all the pod containers.
 
 See [this example](internal/integration/fixtures/extra-volume-mounts.yaml), that will declare a new volume in the `podSpec` and mount it in all the containers. The benefit, is to have the same mounted path in all containers, including the `checkout` container.
 
-### Skipping checkout
+### Skipping checkout (v0.13.0 and later)
 
 For some steps, you may wish to avoid checkout (cloning a source repository).
 This can be done with the `checkout` block under the `kubernetes` plugin:
@@ -434,11 +601,14 @@ steps:
         skip: true # prevents scheduling the checkout container
 ```
 
-### Overriding flags for git clone/fetch
+### Overriding flags for git clone and git fetch (v0.13.0 and later)
 
-`git clone` and `git fetch` flags can be overridden per-step (similar to `BUILDKITE_GIT_CLONE_FLAGS` and `BUILDLKITE_GIT_FETCH_FLAGS` env vars) with the `checkout` block also:
+Flags for `git clone`, `git fetch` can be overridden per-step (similar to
+`BUILDKITE_GIT_CLONE_FLAGS` and `BUILDLKITE_GIT_FETCH_FLAGS` env vars) with
+the `checkout` block also:
 
 ```yaml
+# pipeline.yml
 steps:
 - label: Hello World!
   agents:
@@ -450,38 +620,231 @@ steps:
         fetchFlags: -v --prune --tags
 ```
 
-### Validating your pipeline
+### Overriding other git settings (v0.16.0 and later)
 
-With the unstructured nature of Buildkite plugin specs, it can be frustratingly
-easy to mess up your configuration and then have to debug why your agent pods are failing to start.
-To help prevent this sort of error, there's a linter that uses [JSON
-schema](https://json-schema.org/) to validate the pipeline and plugin
-configuration.
+From v0.16.0 onwards, many more git flags and options supported by the agent are
+also configurable with the `checkout` block. Example:
 
-This currently can't prevent every sort of error, you might still have a reference to a Kubernetes volume that doesn't exist, or other errors of that sort, but it will validate that the fields match the API spec we expect.
+```yaml
+# pipeline.yml
+steps:
+- label: Hello World!
+  agents:
+    queue: kubernetes
+  plugins:
+  - kubernetes:
+      checkout:
+        cleanFlags: -ffxdq
+        noSubmodules: false
+        submoduleCloneConfig: ["key=value", "something=else"]
+        gitMirrors:
+          path: /buildkite/git-mirrors # optional with volume
+          volume:
+            name: my-special-git-mirrors
+            persistentVolumeClaim:
+              claimName: block-pvc
+          lockTimeout: 600
+          skipUpdate: true
+          cloneFlags: -v
+```
 
-Our JSON schema can also be used with editors that support JSON Schema by configuring your editor to validate against the schema found [here](./cmd/linter/schema.json).
-
-## Securing the stack
-
-### Prohibiting the kubernetes plugin (v0.13.0 and later)
-
-Suppose you want to enforce the podSpec used for all jobs at the controller level, and prevent users from setting or overriding that podSpec (or various other parameters) through use of the kubernetes plugin.
-This can be achieved with `prohibit-kubernetes-plugin`, either as a controller flag or within the config `values.yaml`:
+To avoid setting `checkout` on every step, you can use `default-checkout-params`
+within `values.yaml` when deploying the stack. These will apply the settings to
+every job. Example:
 
 ```yaml
 # values.yaml
 ...
 config:
-  prohibit-kubernetes-plugin: true
-  pod-spec-patch:
-    # Override the default podSpec here.
-  ...
+  default-checkout-params:
+    # The available options are the same as `checkout` within `plugin.kubernetes`.
+    cloneFlags: -v --depth 1
+    noSubmodules: true
+    gitMirrors:
+      volume:
+        name: host-git-mirrors
+        hostPath:
+          path: /var/lib/buildkite/git-mirrors
+          type: Directory
 ```
 
-With `prohibit-kubernetes-plugin` enabled, any job containing the kubernetes plugin will fail.
+### Default envFrom
 
-## How to setup agent hooks
+`envFrom` can be added to all checkout, command, and sidecar containers
+separately, either per-step in the pipeline or for all jobs in `values.yaml`.
+
+Pipeline example (note that the blocks are `checkout`, `commandParams`, and
+`sidecarParams`):
+
+```yaml
+# pipeline.yml
+...
+  kubernetes:
+    checkout:
+      envFrom:
+      - prefix: GITHUB_
+        secretRef:
+          name: github-secrets
+    commandParams:
+      interposer: vector
+      envFrom:
+      - prefix: DEPLOY_
+        secretRef:
+          name: deploy-secrets
+    sidecarParams:
+      envFrom:
+      - prefix: LOGGING_
+        configMapRef:
+          name: logging-config
+```
+
+`values.yaml` example:
+
+```yaml
+# values.yml
+config:
+  default-checkout-params:
+    envFrom:
+    - prefix: GITHUB_
+      secretRef:
+        name: github-secrets
+  default-command-params:
+    interposer: vector
+    envFrom:
+    - prefix: DEPLOY_
+      secretRef:
+        name: deploy-secrets
+  default-sidecar-params:
+    envFrom:
+    - prefix: LOGGING_
+      configMapRef:
+        name: logging-config
+```
+
+## Setting agent configuration (v0.16.0 and later)
+
+The `agent-config` block within `values.yaml` can be used to set a subset of
+[the agent configuration file options](https://buildkite.com/docs/agent/v3/configuration).
+
+```yaml
+# values.yaml
+config:
+  agent-config:
+    no-http2: false
+    experiment: ["use-zzglob", "polyglot-hooks"]
+    shell: "/bin/bash"
+    no-color: false
+    strict-single-hooks: true
+    no-multipart-artifact-upload: false
+    trace-context-encoding: json
+    disable-warnings-for: ["submodules-disabled"]
+    no-pty: false
+    no-command-eval: true
+    no-local-hooks: true
+    no-plugins: true
+    plugin-validation: false
+```
+
+Note that, even if `no-command-eval` or `no-plugins` is enabled, the Kubernetes
+plugin may still be able to override everything, since it is interpreted by the
+stack controller, not the agent. `no-command-eval` or `no-plugins` should be
+used together with `prohibit-kubernetes-plugin` (described below).
+
+## How to set up pipeline signing (v0.16.0 and later)
+
+The `agent-config` block within `values.yaml` accepts most of the
+[Signed Pipelines](https://buildkite.com/docs/agent/v3/signed-pipelines) options.
+
+Additionally, volume sources for signing and verification keys can be specified,
+and automatically attached to the right containers.
+
+Any volume source can be specified for keys, but a common choice is to use a
+`secret` source. Keys are generally small, distributed across the cluster,
+and ideally are never shown in plain text.
+
+1.  Create one or two secrets containing signing and verification keys:
+    ```shell
+    kubectl create secret generic my-signing-key --from-file='key'="$HOME/private.jwk"
+    kubectl create secret generic my-verification-key --from-file='key'="$HOME/public.jwk"
+    ```
+
+2.  Add `values.yaml` configuration to use the volumes:
+
+    ```yaml
+    # values.yaml
+    config:
+      agent-config:
+        # The signing key will be attached to command containers, so it can be
+        # used by 'buildkite-agent pipeline upload'.
+        signing-jwks-file: key # optional if the file within the volume is called "key"
+        signing-jwks-key-id: llamas # optional
+        signingJWKSVolume:
+          name: buildkite-signing-jwks
+          secret:
+            secretName: my-signing-key
+        # The verification key will be attached to the 'agent start' container.
+        verification-jwks-file: key # optional if the file within the volume is called "key"
+        verification-failure-behavior: warn # for testing/incremental rollout, use 'block' to enforce
+        verificationJWKSVolume:
+          name: buildkite-verification-jwks
+          secret:
+            secretName: my-verification-key
+    ```
+
+
+Note that `signing-jwks-file` and `verification-jwks-file` agent config options
+can be used to either change the mount point of the corresponding volume (with
+an absolute path) or specify a file within the volume (with a relative path).
+The default mount points are `/buildkite/signing-jwks` and
+`/buildkite/verification-jwks`.
+
+## How to set up agent hooks and plugins (v0.16.0 and later)
+
+The `agent-config` block within `values.yaml` accepts a `hookVolumeSource`
+and `pluginVolumeSource`. If used, the corresponding volumes are named
+`buildkite-hooks` and `buildkite-plugins`, and will be automatically
+mounted on checkout and command containers, with the agent configured to use them.
+
+Any volume source can be specified for agent hooks and plugins, but a common
+choice is to use a `configMap`, since hooks generally aren't very big and
+config maps are made available across the cluster.
+
+1.  Create the config map containing hooks:
+    ```shell
+    kubectl create configmap buildkite-agent-hooks --from-file=/tmp/hooks -n buildkite
+    ```
+
+2.  Example of using hooks from a config map:
+    ```yaml
+    # values.yaml
+    config:
+      agent-config:
+        hooksVolume:
+          name: buildkite-hooks
+          configMap:
+            defaultMode: 493
+            name: buildkite-agent-hooks
+    ```
+
+    Example of using plugins from a host path
+    ([_caveat lector_](https://kubernetes.io/docs/concepts/storage/volumes/#hostpath)):
+
+    ```yaml
+    # values.yaml
+    config:
+      agent-config:
+        pluginsVolume:
+          name: buildkite-plugins
+          hostPath:
+            type: Directory
+            path: /etc/buildkite-agent/plugins
+    ```
+
+Note that `hooks-path` and `plugins-path` agent config options can be used to
+change the mount point of the corresponding volume. The default mount points are
+`/buildkite/hooks` and `/buildkite/plugins`.
+
+## How to set up agent hooks (v0.15.0 and earlier)
 
 This section explains how to setup agent hooks when running Agent Stack K8s. In order for the agent hooks to work, they must be present on the instances where the agent runs.
 
@@ -489,15 +852,17 @@ In case of agent-stack-k8s, we need these hooks to be accessible to the kubernet
 
 Here is the command to create `configmap` which will have agent hooks in it:
 
-```
+```shell
 kubectl create configmap buildkite-agent-hooks --from-file=/tmp/hooks -n buildkite
 ```
 We have all the hooks under directory `/tmp/hooks` and we are creating `configmap` with name `buildkite-agent-hooks` in `buildkite`
 namespace in the k8s cluster.
 
-Here is how to make these hooks in configmap available to the containers. Here is the pipeline config for setting up agent hooks:
+Here is how to make these hooks in configmap available to the containers. Here is the pipeline
+config for setting up agent hooks:
 
-```
+```yaml
+# pipeline.yml
 steps:
 - label: ':pipeline: Pipeline Upload'
   agents:
@@ -510,8 +875,7 @@ steps:
       podSpec:
         containers:
         - command:
-          - echo
-          - hello-world
+          - echo hello-world
           image: alpine:latest
           env:
           - name: BUILDKITE_HOOKS_PATH
@@ -527,7 +891,7 @@ There are 3 main aspects we need to make sure that happen for hooks to be availa
 
 1. Define env `BUILDKITE_HOOKS_PATH` with the path `agent ` and `checkout` containers will look for hooks
 
-   ```
+   ```yaml
           env:
           - name: BUILDKITE_HOOKS_PATH
             value: /buildkite/hooks
@@ -535,16 +899,16 @@ There are 3 main aspects we need to make sure that happen for hooks to be availa
 
 2. Define `VolumeMounts` using `extraVolumeMounts` which will be the path where the hooks will be mounted to with in the containers
 
-   ```
-         extraVolumeMounts:
+   ```yaml
+        extraVolumeMounts:
         - mountPath: /buildkite/hooks
           name: agent-hooks
    ```
 
 3. Define `volumes` where the configmap will be mounted
 
-   ```
-           volumes:
+   ```yaml
+          volumes:
           - configMap:
               defaultMode: 493
               name: buildkite-agent-hooks
@@ -562,7 +926,8 @@ If the env `BUILDKITE_HOOKS_PATH` is set at pipeline level instead of container 
 
 Here is the pipeline config where env `BUILDKITE_HOOKS_PATH` is exposed to all containers in the pipeline:
 
-```
+```yaml
+# pipeline.yml
 steps:
 - label: ':pipeline: Pipeline Upload'
   env:
@@ -603,7 +968,8 @@ In scenarios where we want to `skip checkout` when running on `agent-stack-k8s`,
 
 Here is the pipeline config where checkout is skipped:
 
-```
+```yaml
+# pipeline.yml
 steps:
 - label: ':pipeline: Pipeline Upload'
   env:
@@ -638,6 +1004,41 @@ Running global environment hook
 Running commands
 Running global pre-exit hook
 ```
+
+### Validating your pipeline
+
+With the unstructured nature of Buildkite plugin specs, it can be frustratingly
+easy to mess up your configuration and then have to debug why your agent pods are failing to start.
+To help prevent this sort of error, there's a linter that uses [JSON
+schema](https://json-schema.org/) to validate the pipeline and plugin
+configuration.
+
+This currently can't prevent every sort of error, you might still have a reference to a Kubernetes volume that doesn't exist, or other errors of that sort, but it will validate that the fields match the API spec we expect.
+
+Our JSON schema can also be used with editors that support JSON Schema by configuring your editor to validate against the schema found [here](./cmd/linter/schema.json).
+
+## Securing the stack
+
+### Prohibiting the kubernetes plugin (v0.13.0 and later)
+
+Suppose you want to enforce the podSpec used for all jobs at the controller
+level, and prevent users from setting or overriding that podSpec (or various
+other parameters) through use of the kubernetes plugin.
+This can be achieved with `prohibit-kubernetes-plugin`, either as a controller
+flag or within the config `values.yaml`:
+
+```yaml
+# values.yaml
+...
+config:
+  prohibit-kubernetes-plugin: true
+  pod-spec-patch:
+    # Override the default podSpec here.
+  ...
+```
+
+With `prohibit-kubernetes-plugin` enabled, any job containing the kubernetes
+plugin will fail.
 
 ## Debugging
 Use the `log-collector` script in the `utils` folder to collect logs for agent-stack-k8s.

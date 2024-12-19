@@ -2,12 +2,14 @@ package integration_test
 
 import (
 	"context"
-	"fmt"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/buildkite/agent-stack-k8s/v2/api"
 	"github.com/buildkite/agent-stack-k8s/v2/internal/controller/scheduler"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
@@ -19,7 +21,7 @@ func TestWalkingSkeleton(t *testing.T) {
 		T:       t,
 		Fixture: "helloworld.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
@@ -40,7 +42,7 @@ func TestPodSpecPatchInStep(t *testing.T) {
 		T:       t,
 		Fixture: "podspecpatch-step.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
@@ -51,12 +53,30 @@ func TestPodSpecPatchInStep(t *testing.T) {
 	tc.AssertLogsContain(build, "value of MOUNTAIN is cotopaxi")
 }
 
-func TestPodSpecPatchInStepFailsWhenPatchingContainerCommands(t *testing.T) {
+func TestPodSpecPatchAllowsPatchingCommandContainerCommands(t *testing.T) {
 	tc := testcase{
 		T:       t,
 		Fixture: "podspecpatch-command-step.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
+	}.Init()
+
+	ctx := context.Background()
+	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
+
+	tc.StartController(ctx, cfg)
+	build := tc.TriggerBuild(ctx, pipelineID)
+
+	tc.AssertSuccess(ctx, build)
+	tc.AssertLogsContain(build, "i love quito")
+}
+
+func TestPodSpecPatchRejectsPatchingAgentContainerCommand(t *testing.T) {
+	tc := testcase{
+		T:       t,
+		Fixture: "podspecpatch-agent.yaml",
+		Repo:    repoHTTP,
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 
 	ctx := context.Background()
@@ -66,7 +86,7 @@ func TestPodSpecPatchInStepFailsWhenPatchingContainerCommands(t *testing.T) {
 	build := tc.TriggerBuild(ctx, pipelineID)
 
 	tc.AssertFail(ctx, build)
-	tc.AssertLogsContain(build, fmt.Sprintf("%v", scheduler.ErrNoCommandModification))
+	tc.AssertLogsContain(build, scheduler.ErrNoCommandModification.Error())
 }
 
 func TestPodSpecPatchInController(t *testing.T) {
@@ -74,7 +94,7 @@ func TestPodSpecPatchInController(t *testing.T) {
 		T:       t,
 		Fixture: "mountain.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
@@ -105,7 +125,7 @@ func TestControllerPicksUpJobsWithSubsetOfAgentTags(t *testing.T) {
 		T:       t,
 		Fixture: "helloworld.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 
 	ctx := context.Background()
@@ -124,7 +144,7 @@ func TestControllerSetsAdditionalRedactedVars(t *testing.T) {
 		T:       t,
 		Fixture: "redacted-vars.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 
 	ctx := context.Background()
@@ -147,7 +167,7 @@ func TestPrePostCheckoutHooksRun(t *testing.T) {
 		T:       t,
 		Fixture: "plugin-checkout-hook.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 
 	ctx := context.Background()
@@ -166,7 +186,7 @@ func TestChown(t *testing.T) {
 		T:       t,
 		Fixture: "chown.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
@@ -181,7 +201,7 @@ func TestSSHRepoClone(t *testing.T) {
 		T:       t,
 		Fixture: "secretref.yaml",
 		Repo:    repoSSH,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 
 	ctx := context.Background()
@@ -201,7 +221,7 @@ func TestPluginCloneFailsTests(t *testing.T) {
 		T:       t,
 		Fixture: "unknown-plugin.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 
 	ctx := context.Background()
@@ -217,7 +237,7 @@ func TestMaxInFlightLimited(t *testing.T) {
 		T:       t,
 		Fixture: "parallel.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 
 	ctx := context.Background()
@@ -232,21 +252,31 @@ func TestMaxInFlightLimited(t *testing.T) {
 		build, _, err := tc.Buildkite.Builds.Get(
 			cfg.Org,
 			tc.PipelineName,
-			fmt.Sprintf("%d", buildID),
+			strconv.Itoa(buildID),
 			nil,
 		)
-		require.NoError(t, err)
-		if *build.State == "running" {
-			require.LessOrEqual(t, *build.Pipeline.RunningJobsCount, cfg.MaxInFlight)
-		} else if *build.State == "passed" {
-			break
-		} else if *build.State == "scheduled" {
+		if err != nil {
+			t.Fatalf("tc.Buildkite.Builds.Get(%q, %q, %d, nil) error = %v", cfg.Org, tc.PipelineName, buildID, err)
+		}
+
+		switch *build.State {
+		case "running":
+			if got, want := *build.Pipeline.RunningJobsCount, cfg.MaxInFlight; got > want {
+				t.Fatalf("*build.Pipeline.RunningJobsCount = %d, want <= %d", got, want)
+			}
+
+		case "passed":
+			return
+
+		case "scheduled":
 			t.Log("waiting for build to start")
-			time.Sleep(time.Second)
-			continue
-		} else {
+
+		default:
 			t.Fatalf("unexpected build state: %v", *build.State)
 		}
+
+		// Don't want to hammer the API.
+		time.Sleep(500 * time.Millisecond)
 	}
 }
 
@@ -255,28 +285,33 @@ func TestMaxInFlightUnlimited(t *testing.T) {
 		T:       t,
 		Fixture: "parallel.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 
 	ctx := context.Background()
 
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
 	cfg := cfg
-	cfg.MaxInFlight = 0
+	cfg.MaxInFlight = 0 // unlimited
 	tc.StartController(ctx, cfg)
 	buildID := tc.TriggerBuild(ctx, pipelineID).Number
 
-	var maxRunningJobs int
+	maxRunningJobs := 0
+fetchBuildStateLoop:
 	for {
 		build, _, err := tc.Buildkite.Builds.Get(
 			cfg.Org,
 			tc.PipelineName,
-			fmt.Sprintf("%d", buildID),
+			strconv.Itoa(buildID),
 			nil,
 		)
-		require.NoError(t, err)
-		if *build.State == "running" {
-			var runningJobs int
+		if err != nil {
+			t.Fatalf("tc.Buildkite.Builds.Get(%q, %q, %d, nil) error = %v", cfg.Org, tc.PipelineName, buildID, err)
+		}
+
+		switch *build.State {
+		case "running":
+			runningJobs := 0
 			for _, job := range build.Jobs {
 				if *job.State == "running" {
 					runningJobs++
@@ -284,14 +319,27 @@ func TestMaxInFlightUnlimited(t *testing.T) {
 			}
 			t.Logf("running, runningJobs: %d", runningJobs)
 			maxRunningJobs = max(maxRunningJobs, runningJobs)
-		} else if *build.State == "passed" {
-			require.Equal(t, 4, maxRunningJobs) // all jobs should have run at once
-			break
-		} else if *build.State == "scheduled" {
+
+		case "passed":
+			break fetchBuildStateLoop
+
+		case "scheduled":
 			t.Log("waiting for build to start")
-		} else {
+
+		default:
 			t.Fatalf("unexpected build state: %v", *build.State)
 		}
+
+		// Don't want to hammer the API.
+		time.Sleep(500 * time.Millisecond)
+	}
+
+	// All jobs _can_ run at once... but there's no guarantee that will
+	// happen. There's no "fence" that could be used to block all the jobs
+	// until they're all running. Until we have something like that, this can
+	// flake.
+	if maxRunningJobs != 4 {
+		t.Errorf("maxRunningJobs = %d, want 4", maxRunningJobs)
 	}
 }
 
@@ -300,13 +348,14 @@ func TestSidecars(t *testing.T) {
 		T:       t,
 		Fixture: "sidecars.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
 	tc.StartController(ctx, cfg)
 	build := tc.TriggerBuild(ctx, pipelineID)
 	tc.AssertSuccess(ctx, build)
+	time.Sleep(5 * time.Second)
 	tc.AssertLogsContain(build, "Welcome to nginx!")
 }
 
@@ -315,7 +364,7 @@ func TestExtraVolumeMounts(t *testing.T) {
 		T:       t,
 		Fixture: "extra-volume-mounts.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
@@ -329,13 +378,14 @@ func TestInvalidPodSpec(t *testing.T) {
 		T:       t,
 		Fixture: "invalid.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
 	tc.StartController(ctx, cfg)
 	build := tc.TriggerBuild(ctx, pipelineID)
 	tc.AssertFail(ctx, build)
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
 	tc.AssertLogsContain(
 		build,
 		`is invalid: spec.template.spec.containers[0].volumeMounts[0].name: Not found: "this-doesnt-exist"`,
@@ -347,17 +397,34 @@ func TestInvalidPodJSON(t *testing.T) {
 		T:       t,
 		Fixture: "invalid2.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
 	tc.StartController(ctx, cfg)
 	build := tc.TriggerBuild(ctx, pipelineID)
 	tc.AssertFail(ctx, build)
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
 	tc.AssertLogsContain(
 		build,
 		"failed parsing Kubernetes plugin: json: cannot unmarshal number into Go struct field EnvVar.podSpec.containers.env.value of type string",
 	)
+}
+
+func TestMissingServiceAccount(t *testing.T) {
+	tc := testcase{
+		T:       t,
+		Fixture: "missing-service-account.yaml",
+		Repo:    repoHTTP,
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
+	}.Init()
+	ctx := context.Background()
+	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
+	tc.StartController(ctx, cfg)
+	build := tc.TriggerBuild(ctx, pipelineID)
+	tc.AssertFail(ctx, build)
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
+	tc.AssertLogsContain(build, "error looking up service account")
 }
 
 func TestEnvVariables(t *testing.T) {
@@ -365,44 +432,88 @@ func TestEnvVariables(t *testing.T) {
 		T:       t,
 		Fixture: "env.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
 	tc.StartController(ctx, cfg)
 	build := tc.TriggerBuild(ctx, pipelineID)
 	tc.AssertSuccess(ctx, build)
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
 	tc.AssertLogsContain(build, "Testing some env variables: set")
 }
 
-func TestImagePullBackOffCancelled(t *testing.T) {
+func TestImagePullBackOffFailed(t *testing.T) {
 	tc := testcase{
 		T:       t,
-		Fixture: "image-pull-back-off-cancelled.yaml",
+		Fixture: "image-pull-back-off-failed.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
 	tc.StartController(ctx, cfg)
 	build := tc.TriggerBuild(ctx, pipelineID)
 	tc.AssertFail(ctx, build)
-	tc.AssertLogsContain(build, "other job has run")
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
+	logs := tc.FetchLogs(build)
+	assert.Contains(t, logs, "other job has run")
+	assert.Contains(t, logs, "The following images could not be pulled or were unavailable:\n")
+	assert.Contains(t, logs, `"buildkite/non-existant-image:latest"`)
+	assert.Contains(t, logs, "ImagePullBackOff")
 }
 
-// Asserting that we only kill jobs for image pullbackoff on our system containers.
-func TestImagePullBackOffOnSidecar(t *testing.T) {
+func TestPullPolicyNeverMissingImage(t *testing.T) {
 	tc := testcase{
 		T:       t,
-		Fixture: "image-pull-back-off-sidecar.yaml",
+		Fixture: "never-pull.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
 	tc.StartController(ctx, cfg)
 	build := tc.TriggerBuild(ctx, pipelineID)
-	tc.AssertSuccess(ctx, build)
+	tc.AssertFail(ctx, build)
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
+	logs := tc.FetchLogs(build)
+	assert.Contains(t, logs, "The following images could not be pulled or were unavailable:\n")
+	assert.Contains(t, logs, `"buildkite/agent-extreme:never"`)
+	assert.Contains(t, logs, "ErrImageNeverPull")
+}
+
+func TestBrokenInitContainer(t *testing.T) {
+	tc := testcase{
+		T:       t,
+		Fixture: "broken-init-container.yaml",
+		Repo:    repoHTTP,
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
+	}.Init()
+	ctx := context.Background()
+	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
+	tc.StartController(ctx, cfg)
+	build := tc.TriggerBuild(ctx, pipelineID)
+	tc.AssertFail(ctx, build)
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
+	logs := tc.FetchLogs(build)
+	assert.Contains(t, logs, "The following init containers failed:")
+	assert.Contains(t, logs, "well this isn't going to work")
+}
+
+func TestInvalidImageRefFormat(t *testing.T) {
+	tc := testcase{
+		T:       t,
+		Fixture: "invalid-image-name.yaml",
+		Repo:    repoHTTP,
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
+	}.Init()
+	ctx := context.Background()
+	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
+	tc.StartController(ctx, cfg)
+	build := tc.TriggerBuild(ctx, pipelineID)
+	tc.AssertFail(ctx, build)
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
+	tc.AssertLogsContain(build, `invalid reference format "buildkite/agent:latest plus some extra junk" for container "container-0"`)
 }
 
 func TestArtifactsUploadFailedJobs(t *testing.T) {
@@ -410,7 +521,7 @@ func TestArtifactsUploadFailedJobs(t *testing.T) {
 		T:       t,
 		Fixture: "artifact-upload-failed-job.yaml",
 		Repo:    repoHTTP,
-		GraphQL: api.NewClient(cfg.BuildkiteToken),
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
 	}.Init()
 	ctx := context.Background()
 	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
@@ -418,4 +529,71 @@ func TestArtifactsUploadFailedJobs(t *testing.T) {
 	build := tc.TriggerBuild(ctx, pipelineID)
 	tc.AssertFail(ctx, build)
 	tc.AssertArtifactsContain(build, "artifact.txt")
+}
+
+func TestInterposerBuildkite(t *testing.T) {
+	tc := testcase{
+		T:       t,
+		Fixture: "interposer-buildkite.yaml",
+		Repo:    repoHTTP,
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
+	}.Init()
+	ctx := context.Background()
+	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
+	tc.StartController(ctx, cfg)
+	build := tc.TriggerBuild(ctx, pipelineID)
+	tc.AssertSuccess(ctx, build)
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
+	logs := tc.FetchLogs(build)
+	assert.Contains(t, logs, "Hello World!")
+	assert.Contains(t, logs, "Goodbye World!")
+	assert.NotContains(t, logs, "Hello World! echo Goodbye World!")
+
+}
+
+func TestInterposerVector(t *testing.T) {
+	tc := testcase{
+		T:       t,
+		Fixture: "interposer-vector.yaml",
+		Repo:    repoHTTP,
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
+	}.Init()
+	ctx := context.Background()
+	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
+	tc.StartController(ctx, cfg)
+	build := tc.TriggerBuild(ctx, pipelineID)
+	tc.AssertSuccess(ctx, build)
+	logs := tc.FetchLogs(build)
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
+	assert.Contains(t, logs, "Hello World!")
+	assert.Contains(t, logs, "Goodbye World!")
+}
+
+func TestCancelCheckerEvictsPod(t *testing.T) {
+	tc := testcase{
+		T:       t,
+		Fixture: "cancel-checker.yaml",
+		Repo:    repoHTTP,
+		GraphQL: api.NewClient(cfg.BuildkiteToken, cfg.GraphQLEndpoint),
+	}.Init()
+	ctx := context.Background()
+	pipelineID := tc.PrepareQueueAndPipelineWithCleanup(ctx)
+	tc.StartController(ctx, cfg)
+	build := tc.TriggerBuild(ctx, pipelineID)
+
+	time.Sleep(10 * time.Second)
+
+	_, err := api.BuildCancel(ctx, tc.GraphQL, api.BuildCancelInput{
+		ClientMutationId: uuid.New().String(),
+		Id:               build.Id,
+	})
+	if err != nil {
+		t.Errorf("api.BuildCancel(... %q) error: %v", build.Id, err)
+	}
+	tc.AssertCancelled(ctx, build)
+	time.Sleep(5 * time.Second) // trying to reduce flakes: logs not immediately available
+	logs := tc.FetchLogs(build)
+	if strings.Contains(logs, "Received cancellation signal, interrupting") {
+		t.Error("The agent ran and handled cancellation")
+	}
 }

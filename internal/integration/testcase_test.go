@@ -67,9 +67,9 @@ func (t testcase) Init() testcase {
 	require.NoError(t, err)
 	t.Kubernetes = clientset
 
-	config, err := buildkite.NewTokenConfig(cfg.BuildkiteToken, false)
+	client, err := buildkite.NewOpts(buildkite.WithTokenAuth(cfg.BuildkiteToken))
 	require.NoError(t, err)
-	t.Buildkite = buildkite.NewClient(config.Client())
+	t.Buildkite = client
 
 	return t
 }
@@ -215,10 +215,9 @@ func (t testcase) AssertSuccess(ctx context.Context, build api.Build) {
 func (t testcase) FetchLogs(build api.Build) string {
 	t.Helper()
 
-	config, err := buildkite.NewTokenConfig(cfg.BuildkiteToken, false)
+	client, err := buildkite.NewOpts(buildkite.WithTokenAuth(cfg.BuildkiteToken))
 	require.NoError(t, err)
-
-	client := buildkite.NewClient(config.Client())
+	t.Buildkite = client
 
 	var logs strings.Builder
 	for _, edge := range build.Jobs.Edges {
@@ -252,9 +251,9 @@ func (t testcase) AssertLogsContain(build api.Build, content string) {
 
 func (t testcase) AssertArtifactsContain(build api.Build, expected ...string) {
 	t.Helper()
-	config, err := buildkite.NewTokenConfig(cfg.BuildkiteToken, false)
+	client, err := buildkite.NewOpts(buildkite.WithTokenAuth(cfg.BuildkiteToken))
 	require.NoError(t, err)
-	client := buildkite.NewClient(config.Client())
+	t.Buildkite = client
 
 	artifacts, _, err := client.Artifacts.ListByBuild(
 		cfg.Org,
@@ -275,8 +274,12 @@ func (t testcase) AssertArtifactsContain(build api.Build, expected ...string) {
 
 func (t testcase) AssertFail(ctx context.Context, build api.Build) {
 	t.Helper()
-
 	assert.Equal(t, api.BuildStatesFailed, t.waitForBuild(ctx, build))
+}
+
+func (t testcase) AssertCancelled(ctx context.Context, build api.Build) {
+	t.Helper()
+	assert.Equal(t, api.BuildStatesCanceled, t.waitForBuild(ctx, build))
 }
 
 func (t testcase) waitForBuild(ctx context.Context, build api.Build) api.BuildStates {
