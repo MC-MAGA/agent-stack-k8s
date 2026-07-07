@@ -158,8 +158,8 @@ github.com/bradleyjkemp/cupaloy/v2 v2.6.0 h1:knToPYa2xtfg42U3I6punFEjaGFKWQRXJwj
 github.com/bradleyjkemp/cupaloy/v2 v2.6.0/go.mod h1:bm7JXdkRd4BHJk9HpwqAI8BoAY1lps46Enkdqw6aRX0=
 github.com/brunoscheufler/aws-ecs-metadata-go v0.0.0-20221221133751-67e37ae746cd h1:C0dfBzAdNMqxokqWUysk2KTJSMmqvh9cNW1opdy5+0Q=
 github.com/brunoscheufler/aws-ecs-metadata-go v0.0.0-20221221133751-67e37ae746cd/go.mod h1:CeKhh8xSs3WZAc50xABMxu+FlfAAd5PNumo7NfOv7EE=
-github.com/buildkite/agent/v3 v3.129.0 h1:ohpw+ofP29jtfToBbSfdCH6lR7xDwYRIdn+zX/olVIk=
-github.com/buildkite/agent/v3 v3.129.0/go.mod h1:vdR/SLbzWakWhK4wQO7SRW1YrMGQvP+5ARNXgVXw0LE=
+github.com/buildkite/agent/v3 v3.130.0 h1:fYo5iTrYAK6OTBWBoF7M627tnCKhZaRTD+Ex186dJZ0=
+github.com/buildkite/agent/v3 v3.130.0/go.mod h1:vdR/SLbzWakWhK4wQO7SRW1YrMGQvP+5ARNXgVXw0LE=
 github.com/buildkite/bintest/v3 v3.3.0 h1:RTWcSaJRlOT6t/K311ejPf+0J3LE/QEODzVG3vlLnWo=
 github.com/buildkite/bintest/v3 v3.3.0/go.mod h1:btqpTsVODiJcb0NMdkkmtMQ6xoFc2W/nY5yy+3I0zcs=
 github.com/buildkite/go-buildkite/v3 v3.13.0 h1:8DxSmai9UND0n81BlKqNyCuLmiUSDroMhXq+BF28e7E=
@@ -307,8 +307,8 @@ github.com/hashicorp/go-version v1.9.0 h1:CeOIz6k+LoN3qX9Z0tyQrPtiB1DFYRPfCIBtaX
 github.com/hashicorp/go-version v1.9.0/go.mod h1:fltr4n8CU8Ke44wwGCBoEymUuxUHl09ZGVZPK5anwXA=
 github.com/hexops/gotextdiff v1.0.3 h1:gitA9+qJrrTCsiCl7+kh75nPqQt1cx4ZkudSTLoUqJM=
 github.com/hexops/gotextdiff v1.0.3/go.mod h1:pSWU5MAI3yDq+fZBTazCSJysOMbxWL1BSow5/V2vxeg=
-github.com/jedib0t/go-pretty/v6 v6.8.1 h1:0fkCNhjrX0zPpwkWaDYU5VMrygg41Tu197mWILIJoqQ=
-github.com/jedib0t/go-pretty/v6 v6.8.1/go.mod h1:YwC5CE4fJ1HFUDeivSV1r//AmANFHyqczZk+U6BDALU=
+github.com/jedib0t/go-pretty/v6 v6.8.2 h1:FmKNr1GOyot/zqNQplE8HLhFguJaeHJTCArntnI4uxE=
+github.com/jedib0t/go-pretty/v6 v6.8.2/go.mod h1:YwC5CE4fJ1HFUDeivSV1r//AmANFHyqczZk+U6BDALU=
 github.com/josharian/intern v1.0.0 h1:vlS4z54oSdjm0bgjRigI+G1HpF+tI+9rE5LLzOg8HmY=
 github.com/josharian/intern v1.0.0/go.mod h1:5DoeVV0s6jJacbCEi61lwdGj/aVlrQvzHFFd8Hwg//Y=
 github.com/json-iterator/go v1.1.12 h1:PV8peI4a0ysnczrg+LtxykD8LfKY9ML6u2jnxaEnrnM=

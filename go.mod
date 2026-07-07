@@ -5,7 +5,7 @@ go 1.26.0
 require (
 	github.com/Khan/genqlient v0.8.1
 	github.com/alecthomas/kong v1.15.0
-	github.com/buildkite/agent/v3 v3.129.0
+	github.com/buildkite/agent/v3 v3.130.0
 	github.com/buildkite/go-buildkite/v3 v3.13.0
 	github.com/buildkite/roko v1.4.0
 	github.com/buildkite/stacksapi v1.0.2
@@ -14,7 +14,7 @@ require (
 	github.com/go-playground/universal-translator v0.18.1
 	github.com/go-playground/validator/v10 v10.30.3
 	github.com/google/uuid v1.6.0
-	github.com/jedib0t/go-pretty/v6 v6.8.1
+	github.com/jedib0t/go-pretty/v6 v6.8.2
 	github.com/kballard/go-shellquote v0.0.0-20180428030007-95032a82bc51
 	github.com/lmittmann/tint v1.1.3
 	github.com/xeipuuv/gojsonschema v1.2.0
