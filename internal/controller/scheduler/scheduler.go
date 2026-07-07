@@ -245,13 +245,15 @@ func (w *worker) ParseJob(job *api.AgentJob, sjob *api.AgentScheduledJob) (build
 	}
 
 	var plugins []map[string]json.RawMessage
-	if pluginsJSON, ok := parsed.envMap["BUILDKITE_PLUGINS"]; ok {
-		if err := json.Unmarshal([]byte(pluginsJSON), &plugins); err != nil {
-			w.logger.Debug("invalid plugin spec", "json", pluginsJSON)
-			return parsed, fmt.Errorf("failed parsing plugins: %w", err)
-		}
+	pluginsJSON := parsed.envMap["BUILDKITE_PLUGINS"]
+	w.logger.Info("parsing", "plugins", pluginsJSON)
+	if pluginsJSON == "" {
+		return parsed, nil
 	}
-	w.logger.Info("parsing", "plugins", plugins)
+	if err := json.Unmarshal([]byte(pluginsJSON), &plugins); err != nil {
+		w.logger.Debug("invalid plugin spec", "json", pluginsJSON)
+		return parsed, fmt.Errorf("failed parsing plugins: %w", err)
+	}
 	for _, plugin := range plugins {
 		if len(plugin) != 1 {
 			return parsed, fmt.Errorf("found invalid plugin: %v", plugin)
