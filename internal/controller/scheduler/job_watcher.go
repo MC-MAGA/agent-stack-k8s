@@ -253,6 +253,10 @@ func (w *jobWatcher) fetchEvents(ctx context.Context, log *slog.Logger, kjob *ba
 	// diagnosing the problem.
 	events := w.k8s.CoreV1().Events(w.cfg.Namespace)
 	evlist, err := events.List(ctx, metav1.ListOptions{
+		// These events are only used for diagnostic messages, so serve the
+		// read from the API server's watch cache (ResourceVersion "0")
+		// instead of forcing a quorum read from etcd.
+		ResourceVersion: "0",
 		FieldSelector: fields.AndSelectors(
 			fields.OneTermEqualSelector("involvedObject.kind", "Job"),
 			fields.OneTermEqualSelector("involvedObject.name", kjob.Name),
