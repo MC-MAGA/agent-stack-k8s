@@ -13,7 +13,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	_ "k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/retry"
-	"k8s.io/utils/ptr"
 )
 
 // completionsWatcher watches for pods where the agent container has terminated
@@ -137,7 +136,7 @@ func (w *completionsWatcher) cleanupSidecars(ctx context.Context, pod *corev1.Po
 		if err != nil {
 			return err
 		}
-		job.Spec.ActiveDeadlineSeconds = ptr.To(w.terminationGracePeriodSeconds)
+		job.Spec.ActiveDeadlineSeconds = new(w.terminationGracePeriodSeconds)
 		_, err = w.k8s.BatchV1().Jobs(pod.Namespace).Update(ctx, job, metav1.UpdateOptions{})
 		return err
 	}); err != nil {

@@ -653,19 +653,20 @@ func (w *podWatcher) failForPendingTimeout(ctx context.Context, log *slog.Logger
 
 	// Create the failure message
 	pendingDuration := time.Since(pod.CreationTimestamp.Time)
-	message := fmt.Sprintf("The pod has been in Pending state for %s without starting.\n", pendingDuration.Round(time.Second))
+	var message strings.Builder
+	fmt.Fprintf(&message, "The pod has been in Pending state for %s without starting.\n", pendingDuration.Round(time.Second))
 
 	// Add pod conditions to help diagnose the issue
 	if len(pod.Status.Conditions) > 0 {
-		message += "\nPod Conditions:\n"
+		message.WriteString("\nPod Conditions:\n")
 		for _, condition := range pod.Status.Conditions {
-			message += fmt.Sprintf("  - %s: %s (Reason: %s, Message: %s)\n",
+			fmt.Fprintf(&message, "  - %s: %s (Reason: %s, Message: %s)\n",
 				condition.Type, condition.Status, condition.Reason, condition.Message)
 		}
 	}
 
 	failureInfo := FailureInfo{
-		Message: message,
+		Message: message.String(),
 		Reason:  agent.SignalReasonStackError,
 	}
 
