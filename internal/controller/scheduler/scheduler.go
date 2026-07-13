@@ -351,7 +351,7 @@ func (w *worker) Build(podSpec *corev1.PodSpec, skipCheckout bool, inputs buildI
 	kjob.Spec.BackoffLimit = ptr.To[int32](0)
 
 	if podSpec.TerminationGracePeriodSeconds == nil {
-		podSpec.TerminationGracePeriodSeconds = ptr.To(int64(w.cfg.DefaultTerminationGracePeriodSeconds))
+		podSpec.TerminationGracePeriodSeconds = new(int64(w.cfg.DefaultTerminationGracePeriodSeconds))
 	}
 
 	// workspaceVolume is shared among most containers, so set it up first.
@@ -960,7 +960,7 @@ func (w *worker) createWorkspaceSetupContainer(podSpec *corev1.PodSpec, workspac
 		securityContext = &corev1.SecurityContext{
 			RunAsUser:    ptr.To[int64](0),
 			RunAsGroup:   ptr.To[int64](0),
-			RunAsNonRoot: ptr.To(false),
+			RunAsNonRoot: new(false),
 		}
 
 		fmt.Fprintf(&containerArgs, "chown -R %d:%d /workspace\n", podUser, podGroup)
@@ -970,7 +970,7 @@ func (w *worker) createWorkspaceSetupContainer(podSpec *corev1.PodSpec, workspac
 		securityContext = &corev1.SecurityContext{
 			RunAsUser:    ptr.To[int64](0),
 			RunAsGroup:   ptr.To[int64](0),
-			RunAsNonRoot: ptr.To(false),
+			RunAsNonRoot: new(false),
 		}
 
 		fmt.Fprintf(&containerArgs, "chown -R %d /workspace\n", podUser)
@@ -1133,7 +1133,7 @@ func (w *worker) createCheckoutContainer(
 		checkoutContainer.SecurityContext = &corev1.SecurityContext{
 			RunAsUser:    ptr.To[int64](0),
 			RunAsGroup:   ptr.To[int64](0),
-			RunAsNonRoot: ptr.To(false),
+			RunAsNonRoot: new(false),
 		}
 
 		gid := podGroup

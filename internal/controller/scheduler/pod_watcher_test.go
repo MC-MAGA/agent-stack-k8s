@@ -6,8 +6,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
@@ -18,7 +16,6 @@ func TestPodHasExceededPendingTimeout(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	w := &podWatcher{podPendingTimeout: 5 * time.Minute}
-	require.NotNil(t, w)
 
 	now := time.Now()
 
@@ -125,7 +122,6 @@ func TestPodHasExceededPendingTimeout(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -155,10 +151,18 @@ func TestIsSidecarInitContainer(t *testing.T) {
 		},
 	}
 
-	assert.False(t, isSidecarInitContainer(pod, "checkout"))
-	assert.True(t, isSidecarInitContainer(pod, "sidecar-0"))
-	assert.False(t, isSidecarInitContainer(pod, "imagecheck-0"))
-	assert.False(t, isSidecarInitContainer(pod, "nonexistent"))
+	if got := isSidecarInitContainer(pod, "checkout"); got {
+		t.Errorf("isSidecarInitContainer(pod, \"checkout\") = %t, want false", got)
+	}
+	if got := isSidecarInitContainer(pod, "sidecar-0"); !got {
+		t.Errorf("isSidecarInitContainer(pod, \"sidecar-0\") = %t, want true", got)
+	}
+	if got := isSidecarInitContainer(pod, "imagecheck-0"); got {
+		t.Errorf("isSidecarInitContainer(pod, \"imagecheck-0\") = %t, want false", got)
+	}
+	if got := isSidecarInitContainer(pod, "nonexistent"); got {
+		t.Errorf("isSidecarInitContainer(pod, \"nonexistent\") = %t, want false", got)
+	}
 }
 
 func TestFormatImagePullFailureNotification(t *testing.T) {
@@ -199,10 +203,11 @@ func TestFormatImagePullFailureNotification(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			assert.Equal(t, tt.want, formatImagePullFailureNotification(tt.statuses))
+			if got, want := formatImagePullFailureNotification(tt.statuses), tt.want; got != want {
+				t.Errorf("formatImagePullFailureNotification(tt.statuses) = %q, want %q", got, want)
+			}
 		})
 	}
 }
@@ -239,11 +244,19 @@ func TestPodHasFailingImages_RunningPod(t *testing.T) {
 
 	// Within the grace period: not failing yet.
 	got := w.podHasFailingImages(logger, newRunningPod(5*time.Second))
-	assert.Empty(t, got, "should respect grace period")
+	if len(got) != 0 {
+		t.Errorf("should respect grace period")
+	}
 
 	// Past the grace period: the command container's ImagePullBackOff is detected.
 	got = w.podHasFailingImages(logger, newRunningPod(time.Minute))
-	require.Len(t, got, 1)
-	assert.Equal(t, "container-0", got[0].Name)
-	assert.Equal(t, "ImagePullBackOff", got[0].State.Waiting.Reason)
+	if got, want := len(got), 1; got != want {
+		t.Fatalf("len(w.podHasFailingImages(logger, newRunningPod(time.Minute))) = %d, want %d", got, want)
+	}
+	if got, want := got[0].Name, "container-0"; got != want {
+		t.Errorf("got[0].Name = %q, want %q", got, want)
+	}
+	if got, want := got[0].State.Waiting.Reason, "ImagePullBackOff"; got != want {
+		t.Errorf("got[0].State.Waiting.Reason = %q, want %q", got, want)
+	}
 }

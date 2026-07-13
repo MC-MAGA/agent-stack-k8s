@@ -4,16 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/buildkite/agent-stack-k8s/v2/api"
 	"github.com/buildkite/agent-stack-k8s/v2/internal/controller/config"
 	"github.com/google/go-cmp/cmp"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 )
 
@@ -366,7 +364,9 @@ func TestJobPluginConversion(t *testing.T) {
 			},
 		},
 	})
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("json.Marshal([]map[string]any{\n\t{\n\t\t\"github.com/buildkite-plugins/kubernetes-buildkite-plugin\": pluginConfig,\n\t},\n\t{\n\t\t\"github.com/buildkite-plugins/some-other-buildkite-plugin\": map[string]any{\n\t\t\t\"foo\": \"bar\",\n\t\t},\n\t},\n}) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID:  "abc",
@@ -385,18 +385,26 @@ func TestJobPluginConversion(t *testing.T) {
 		},
 	)
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(pluginConfig.PodSpec, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(pluginConfig.PodSpec, %t, inputs) error = %v, want nil", false, err)
+	}
 
 	gotPodSpec := kjob.Spec.Template.Spec
 
-	assert.Len(t, gotPodSpec.Containers, 3)
+	if got, want := len(gotPodSpec.Containers), 3; got != want {
+		t.Errorf("len(gotPodSpec.Containers) = %d, want %d", got, want)
+	}
 
 	agentContainer := findContainer(t, gotPodSpec.Containers, "agent")
 
 	tokenEnv := findEnv(t, agentContainer.Env, "BUILDKITE_AGENT_TOKEN")
-	assert.Equal(t, "token-secret", tokenEnv.ValueFrom.SecretKeyRef.Name)
+	if got, want := tokenEnv.ValueFrom.SecretKeyRef.Name, "token-secret"; got != want {
+		t.Errorf("tokenEnv.ValueFrom.SecretKeyRef.Name = %q, want %q", got, want)
+	}
 
 	commandContainer := findContainer(t, gotPodSpec.Containers, "container-0")
 
@@ -426,10 +434,14 @@ func TestJobPluginConversion(t *testing.T) {
 			envFromNames = append(envFromNames, envFrom.SecretRef.Name)
 		}
 	}
-	require.ElementsMatch(t, envFromNames, []string{"some-configmap", "git-secret"})
+	if diff := cmp.Diff(slices.Sorted(slices.Values(envFromNames)), slices.Sorted(slices.Values([]string{"some-configmap", "git-secret"}))); diff != "" {
+		t.Fatalf("envFromNames sorted diff (-got +want):\n%s", diff)
+	}
 
 	tagLabel := kjob.Labels["tag.buildkite.com/queue"]
-	assert.Equal(t, tagLabel, "kubernetes")
+	if got, want := tagLabel, "kubernetes"; got != want {
+		t.Errorf("kjob.Labels[\"tag.buildkite.com/queue\"] = %q, want %q", got, want)
+	}
 }
 
 func TestTagEnv(t *testing.T) {
@@ -451,7 +463,9 @@ func TestTagEnv(t *testing.T) {
 			"github.com/buildkite-plugins/kubernetes-buildkite-plugin": pluginConfig,
 		},
 	})
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("json.Marshal([]map[string]any{\n\t{\n\t\t\"github.com/buildkite-plugins/kubernetes-buildkite-plugin\": pluginConfig,\n\t},\n}) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID:  "abc",
@@ -470,9 +484,13 @@ func TestTagEnv(t *testing.T) {
 		},
 	)
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(pluginConfig.PodSpec, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(pluginConfig.PodSpec, %t, inputs) error = %v, want nil", false, err)
+	}
 
 	container := findContainer(t, kjob.Spec.Template.Spec.Containers, "agent")
 	assertEnvFieldPath(t, container, "BUILDKITE_K8S_NODE", "spec.nodeName")
@@ -484,12 +502,25 @@ func assertEnvFieldPath(t *testing.T, container corev1.Container, envVarName, fi
 	t.Helper()
 
 	env := findEnv(t, container.Env, envVarName)
-	if assert.NotNil(t, env) {
-		assert.Equal(t, env.Value, "")
-		hasFieldRef := assert.NotNil(t, env.ValueFrom) && assert.NotNil(t, env.ValueFrom.FieldRef)
-		if hasFieldRef {
-			assert.Equal(t, env.ValueFrom.FieldRef.FieldPath, fieldPath)
-		}
+	if got := env; got == nil {
+		t.Errorf("findEnv(t, container.Env, %q) = %v, want non-nil value", envVarName, got)
+	}
+	if env == nil {
+		return
+	}
+	if got, want := env.Value, ""; got != want {
+		t.Errorf("env.Value = %q, want %q", got, want)
+	}
+	if got := env.ValueFrom; got == nil {
+		t.Errorf("env.ValueFrom = %v, want non-nil value", got)
+		return
+	}
+	if got := env.ValueFrom.FieldRef; got == nil {
+		t.Errorf("env.ValueFrom.FieldRef = %v, want non-nil value", got)
+		return
+	}
+	if got, want := fieldPath, env.ValueFrom.FieldRef.FieldPath; got != want {
+		t.Errorf("fieldPath = %q, want %q", got, want)
 	}
 }
 
@@ -504,17 +535,27 @@ func TestJobWithNoKubernetesPlugin(t *testing.T) {
 		Image: "buildkite/agent:latest",
 	})
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
-	require.Len(t, kjob.Spec.Template.Spec.Containers, 3)
+	if got, want := len(kjob.Spec.Template.Spec.Containers), 3; got != want {
+		t.Fatalf("len(kjob.Spec.Template.Spec.Containers) = %d, want %d", got, want)
+	}
 
 	commandContainer := findContainer(t, kjob.Spec.Template.Spec.Containers, "container-0")
 	commandEnv := findEnv(t, commandContainer.Env, "BUILDKITE_COMMAND")
-	require.Equal(t, job.Command, commandEnv.Value)
+	if got, want := commandEnv.Value, job.Command; got != want {
+		t.Fatalf("commandEnv.Value = %q, want %q", got, want)
+	}
 	pluginsEnv := findEnv(t, commandContainer.Env, "BUILDKITE_PLUGINS")
-	require.Nil(t, pluginsEnv)
+	if got := pluginsEnv; got != nil {
+		t.Fatalf("findEnv(t, commandContainer.Env, %q) = %v, want nil", "BUILDKITE_PLUGINS", got)
+	}
 }
 
 func TestBuild(t *testing.T) {
@@ -527,7 +568,9 @@ func TestBuild(t *testing.T) {
         image: alpine:latest`
 
 	pluginsJSON, err := yaml.YAMLToJSONStrict([]byte(pluginsYAML))
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("yaml.YAMLToJSONStrict([]byte(pluginsYAML)) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID:      "abc",
@@ -566,14 +609,22 @@ func TestBuild(t *testing.T) {
 		},
 	)
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
-	require.Len(t, kjob.Spec.Template.Spec.Containers, 3)
+	if got, want := len(kjob.Spec.Template.Spec.Containers), 3; got != want {
+		t.Fatalf("len(kjob.Spec.Template.Spec.Containers) = %d, want %d", got, want)
+	}
 
 	controllerIDLabel := kjob.Labels["buildkite.com/controller-id"]
-	assert.Equal(t, controllerIDLabel, "controller-1")
+	if got, want := controllerIDLabel, "controller-1"; got != want {
+		t.Errorf("kjob.Labels[\"buildkite.com/controller-id\"] = %q, want %q", got, want)
+	}
 
 	container0 := findContainer(t, kjob.Spec.Template.Spec.Containers, "container-0")
 	if diff := cmp.Diff(container0.Image, "alpine:latest"); diff != "" {
@@ -614,9 +665,13 @@ func TestBuildWorkspaceMountSubPathExpr(t *testing.T) {
 		},
 	)
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
 	const wantMountPath = "/workspace"
 	const wantSubPathExpr = "$(POD_NAME)"
@@ -661,9 +716,13 @@ func TestBuildWorkspaceMountSubPathExprDefault(t *testing.T) {
 		Image: "buildkite/agent:latest",
 	})
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
 	checkNoSubPath := func(t *testing.T, label, containerName string, mounts []corev1.VolumeMount) {
 		t.Helper()
@@ -690,7 +749,9 @@ func TestBuildSkipCheckout(t *testing.T) {
       skip: true`
 
 	pluginsJSON, err := yaml.YAMLToJSONStrict([]byte(pluginsYAML))
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("yaml.YAMLToJSONStrict([]byte(pluginsYAML)) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID:      "abc",
@@ -712,11 +773,17 @@ func TestBuildSkipCheckout(t *testing.T) {
 		},
 	)
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
-	require.Len(t, kjob.Spec.Template.Spec.Containers, 2)
+	if got, want := len(kjob.Spec.Template.Spec.Containers), 2; got != want {
+		t.Fatalf("len(kjob.Spec.Template.Spec.Containers) = %d, want %d", got, want)
+	}
 
 	container0 := findContainer(t, kjob.Spec.Template.Spec.Containers, "container-0")
 	if diff := cmp.Diff(container0.Image, "buildkite/agent:latest"); diff != "" {
@@ -738,7 +805,9 @@ func TestBuildCheckoutEmptyConfigEnv(t *testing.T) {
   `
 
 	pluginsJSON, err := yaml.YAMLToJSONStrict([]byte(pluginsYAML))
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("yaml.YAMLToJSONStrict([]byte(pluginsYAML)) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID:      "abc",
@@ -760,9 +829,13 @@ func TestBuildCheckoutEmptyConfigEnv(t *testing.T) {
 		},
 	)
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
 	for _, container := range kjob.Spec.Template.Spec.Containers {
 		if container.Name == "checkout" {
@@ -806,9 +879,13 @@ func TestBuildDefaultCheckoutParams(t *testing.T) {
 		},
 	})
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
 	var checkoutContainer *corev1.Container
 	for _, container := range kjob.Spec.Template.Spec.Containers {
@@ -817,7 +894,9 @@ func TestBuildDefaultCheckoutParams(t *testing.T) {
 		}
 	}
 
-	require.NotNil(t, checkoutContainer)
+	if got := checkoutContainer; got == nil {
+		t.Fatalf("&container = %v, want non-nil value", got)
+	}
 
 	// Validate that git credential secret is mounted and available in checkout container's path
 	var hasGitCredentialsRO, hasGitCredentials bool
@@ -878,7 +957,9 @@ func TestBuildCheckoutParams(t *testing.T) {
   `
 
 	pluginsJSON, err := yaml.YAMLToJSONStrict([]byte(pluginsYAML))
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("yaml.YAMLToJSONStrict([]byte(pluginsYAML)) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID:      "abc",
@@ -899,9 +980,13 @@ func TestBuildCheckoutParams(t *testing.T) {
 		},
 	)
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
 	var checkoutContainer *corev1.Container
 	for _, container := range kjob.Spec.Template.Spec.Containers {
@@ -910,7 +995,9 @@ func TestBuildCheckoutParams(t *testing.T) {
 		}
 	}
 
-	require.NotNil(t, checkoutContainer)
+	if got := checkoutContainer; got == nil {
+		t.Fatalf("&container = %v, want non-nil value", got)
+	}
 
 	// Validate that git credential secret is mounted and available in checkout container's path
 	var hasGitCredentialsRO, hasGitCredentials bool
@@ -962,7 +1049,9 @@ func TestFailureJobs(t *testing.T) {
 			"github.com/buildkite-plugins/kubernetes-buildkite-plugin": `"some-invalid-json"`,
 		},
 	})
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("json.Marshal([]map[string]any{\n\t{\n\t\t\"github.com/buildkite-plugins/kubernetes-buildkite-plugin\": `\"some-invalid-json\"`,\n\t},\n}) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID:  "abc",
@@ -975,7 +1064,9 @@ func TestFailureJobs(t *testing.T) {
 		Image: "buildkite/agent:latest",
 	})
 	_, err = wrapper.ParseJob(job, sjob)
-	require.Error(t, err)
+	if err == nil {
+		t.Fatalf("wrapper.ParseJob(job, sjob) error = %v, want non-nil error", err)
+	}
 }
 
 func TestProhibitKubernetesPlugin(t *testing.T) {
@@ -985,7 +1076,9 @@ func TestProhibitKubernetesPlugin(t *testing.T) {
 			"github.com/buildkite-plugins/kubernetes-buildkite-plugin": KubernetesPlugin{},
 		},
 	})
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("json.Marshal([]map[string]any{\n\t{\n\t\t\"github.com/buildkite-plugins/kubernetes-buildkite-plugin\": KubernetesPlugin{},\n\t},\n}) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID:  "abc",
@@ -999,7 +1092,9 @@ func TestProhibitKubernetesPlugin(t *testing.T) {
 		ProhibitK8sPlugin: true,
 	})
 	_, err = worker.ParseJob(job, sjob)
-	require.Error(t, err)
+	if err == nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want non-nil error", err)
+	}
 }
 
 func TestCustomImageSyntax_pluginTakesTopPriority(t *testing.T) {
@@ -1012,7 +1107,9 @@ func TestCustomImageSyntax_pluginTakesTopPriority(t *testing.T) {
         image: "x-image:plugin"`
 
 	pluginsJSON, err := yaml.YAMLToJSONStrict([]byte(pluginsYAML))
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("yaml.YAMLToJSONStrict([]byte(pluginsYAML)) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID: "abc",
@@ -1028,12 +1125,18 @@ func TestCustomImageSyntax_pluginTakesTopPriority(t *testing.T) {
 		Image: "buildkite/agent:latest",
 	})
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
 	commandContainer := findContainer(t, kjob.Spec.Template.Spec.Containers, DefaultCommandContainerName)
-	require.Equal(t, "x-image:plugin", commandContainer.Image)
+	if got, want := commandContainer.Image, "x-image:plugin"; got != want {
+		t.Fatalf("commandContainer.Image = %q, want %q", got, want)
+	}
 }
 
 // Job level image syntax takes priority over controller setting
@@ -1062,13 +1165,19 @@ func TestCustomImageSyntax_jobLevelImagePriority(t *testing.T) {
 		},
 	})
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
 	commandContainer := findContainer(t, kjob.Spec.Template.Spec.Containers, DefaultCommandContainerName)
 
-	require.Equal(t, "x-image:job", commandContainer.Image)
+	if got, want := commandContainer.Image, "x-image:job"; got != want {
+		t.Fatalf("commandContainer.Image = %q, want %q", got, want)
+	}
 }
 
 func TestImagePullPolicies(t *testing.T) {
@@ -1647,7 +1756,9 @@ func TestAdditionalHooksOptions(t *testing.T) {
 					agentQueryRules: []string{"queue=kubernetes"},
 				},
 			)
-			require.NoError(t, err)
+			if err != nil {
+				t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, buildInputs{\n\tuuid:\t\t\t\"1234\",\n\tcommand:\t\t\"echo shell\",\n\tagentQueryRules:\t[]string{\"queue=kubernetes\"},\n}) error = %v, want nil", false, err)
+			}
 
 			// Check pod volumes.
 			podSpec := kjob.Spec.Template.Spec
@@ -1730,7 +1841,7 @@ func TestPipelineSigningOptions(t *testing.T) {
 		{
 			name: "verification key only",
 			agentConfig: &config.AgentConfig{
-				VerificationJWKSFile:   ptr.To("/path/to/verification.jwks"),
+				VerificationJWKSFile:   new("/path/to/verification.jwks"),
 				VerificationJWKSVolume: verificationVol,
 			},
 			wantPodVolumes:    []string{verificationVol.Name},
@@ -1746,7 +1857,7 @@ func TestPipelineSigningOptions(t *testing.T) {
 		{
 			name: "signing key only",
 			agentConfig: &config.AgentConfig{
-				SigningJWKSFile:   ptr.To("/path/to/signing.jwks"),
+				SigningJWKSFile:   new("/path/to/signing.jwks"),
 				SigningJWKSVolume: signingVol,
 			},
 			wantPodVolumes:    []string{signingVol.Name},
@@ -1762,9 +1873,9 @@ func TestPipelineSigningOptions(t *testing.T) {
 		{
 			name: "both keys",
 			agentConfig: &config.AgentConfig{
-				VerificationJWKSFile:   ptr.To("/verification/path/verification.jwks"),
+				VerificationJWKSFile:   new("/verification/path/verification.jwks"),
 				VerificationJWKSVolume: verificationVol,
-				SigningJWKSFile:        ptr.To("/signing/path/signing.jwks"),
+				SigningJWKSFile:        new("/signing/path/signing.jwks"),
 				SigningJWKSVolume:      signingVol,
 			},
 			wantPodVolumes: []string{verificationVol.Name, signingVol.Name},
@@ -1793,9 +1904,9 @@ func TestPipelineSigningOptions(t *testing.T) {
 			name: "relative paths",
 			agentConfig: &config.AgentConfig{
 				VerificationJWKSVolume: verificationVol,
-				VerificationJWKSFile:   ptr.To("my-awesome-key"),
+				VerificationJWKSFile:   new("my-awesome-key"),
 				SigningJWKSVolume:      signingVol,
-				SigningJWKSFile:        ptr.To("my-special-key"),
+				SigningJWKSFile:        new("my-special-key"),
 			},
 			wantPodVolumes: []string{verificationVol.Name, signingVol.Name},
 			wantAgentEnv: map[string]string{
@@ -1949,12 +2060,20 @@ func TestBuildSafeToEvictDefault(t *testing.T) {
 		Image: "buildkite/agent:latest",
 	})
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
-	assert.Equal(t, "false", kjob.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"])
-	assert.Equal(t, "false", kjob.Spec.Template.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"])
+	if got, want := kjob.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"], "false"; got != want {
+		t.Errorf("kjob.Annotations[\"cluster-autoscaler.kubernetes.io/safe-to-evict\"] = %q, want %q", got, want)
+	}
+	if got, want := kjob.Spec.Template.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"], "false"; got != want {
+		t.Errorf("kjob.Spec.Template.Annotations[\"cluster-autoscaler.kubernetes.io/safe-to-evict\"] = %q, want %q", got, want)
+	}
 }
 
 func TestBuildSafeToEvictDefaultMetadataOverride(t *testing.T) {
@@ -1973,12 +2092,20 @@ func TestBuildSafeToEvictDefaultMetadataOverride(t *testing.T) {
 		},
 	})
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
-	assert.Equal(t, "true", kjob.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"])
-	assert.Equal(t, "true", kjob.Spec.Template.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"])
+	if got, want := kjob.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"], "true"; got != want {
+		t.Errorf("kjob.Annotations[\"cluster-autoscaler.kubernetes.io/safe-to-evict\"] = %q, want %q", got, want)
+	}
+	if got, want := kjob.Spec.Template.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"], "true"; got != want {
+		t.Errorf("kjob.Spec.Template.Annotations[\"cluster-autoscaler.kubernetes.io/safe-to-evict\"] = %q, want %q", got, want)
+	}
 }
 
 func TestBuildSafeToEvictPluginMetadataOverride(t *testing.T) {
@@ -1990,7 +2117,9 @@ func TestBuildSafeToEvictPluginMetadataOverride(t *testing.T) {
         cluster-autoscaler.kubernetes.io/safe-to-evict: "true"`
 
 	pluginsJSON, err := yaml.YAMLToJSONStrict([]byte(pluginsYAML))
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("yaml.YAMLToJSONStrict([]byte(pluginsYAML)) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID:      "abc",
@@ -2002,12 +2131,20 @@ func TestBuildSafeToEvictPluginMetadataOverride(t *testing.T) {
 		Image: "buildkite/agent:latest",
 	})
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
-	assert.Equal(t, "true", kjob.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"])
-	assert.Equal(t, "true", kjob.Spec.Template.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"])
+	if got, want := kjob.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"], "true"; got != want {
+		t.Errorf("kjob.Annotations[\"cluster-autoscaler.kubernetes.io/safe-to-evict\"] = %q, want %q", got, want)
+	}
+	if got, want := kjob.Spec.Template.Annotations["cluster-autoscaler.kubernetes.io/safe-to-evict"], "true"; got != want {
+		t.Errorf("kjob.Spec.Template.Annotations[\"cluster-autoscaler.kubernetes.io/safe-to-evict\"] = %q, want %q", got, want)
+	}
 }
 
 func TestBuildPodTemplateAnnotation(t *testing.T) {
@@ -2017,7 +2154,9 @@ func TestBuildPodTemplateAnnotation(t *testing.T) {
     podTemplate: my-pod-template`
 
 	pluginsJSON, err := yaml.YAMLToJSONStrict([]byte(pluginsYAML))
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("yaml.YAMLToJSONStrict([]byte(pluginsYAML)) error = %v, want nil", err)
+	}
 
 	job := &api.AgentJob{
 		ID:      "abc",
@@ -2029,12 +2168,20 @@ func TestBuildPodTemplateAnnotation(t *testing.T) {
 		Image: "buildkite/agent:latest",
 	})
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
-	require.Equal(t, "my-pod-template", kjob.Annotations[config.PodTemplateAnnotation])
-	require.Equal(t, "my-pod-template", kjob.Spec.Template.Annotations[config.PodTemplateAnnotation])
+	if got, want := kjob.Annotations[config.PodTemplateAnnotation], "my-pod-template"; got != want {
+		t.Fatalf("kjob.Annotations[config.PodTemplateAnnotation] = %q, want %q", got, want)
+	}
+	if got, want := kjob.Spec.Template.Annotations[config.PodTemplateAnnotation], "my-pod-template"; got != want {
+		t.Fatalf("kjob.Spec.Template.Annotations[config.PodTemplateAnnotation] = %q, want %q", got, want)
+	}
 }
 
 func TestBuildNoPodTemplateAnnotationWhenAbsent(t *testing.T) {
@@ -2049,10 +2196,18 @@ func TestBuildNoPodTemplateAnnotationWhenAbsent(t *testing.T) {
 		Image: "buildkite/agent:latest",
 	})
 	inputs, err := worker.ParseJob(job, sjob)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.ParseJob(job, sjob) error = %v, want nil", err)
+	}
 	kjob, err := worker.Build(&corev1.PodSpec{}, false, inputs)
-	require.NoError(t, err)
+	if err != nil {
+		t.Fatalf("worker.Build(&corev1.PodSpec{}, %t, inputs) error = %v, want nil", false, err)
+	}
 
-	require.Empty(t, kjob.Annotations[config.PodTemplateAnnotation])
-	require.Empty(t, kjob.Spec.Template.Annotations[config.PodTemplateAnnotation])
+	if got := kjob.Annotations[config.PodTemplateAnnotation]; got != "" {
+		t.Fatalf("kjob.Annotations[config.PodTemplateAnnotation] = %v, want \"\"", got)
+	}
+	if got := kjob.Spec.Template.Annotations[config.PodTemplateAnnotation]; got != "" {
+		t.Fatalf("kjob.Spec.Template.Annotations[config.PodTemplateAnnotation] = %v, want \"\"", got)
+	}
 }

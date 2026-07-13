@@ -40,8 +40,8 @@ steps:
       - . .buildkite/steps/assume-role.sh
       - buildkite-agent cache restore
       - golangci-lint run -v ./...
+      - go tool assertzapper ./...
       - buildkite-agent cache save
-
 
   - label: ":golang::robot_face: check code generation"
     key: check-code-generation
@@ -52,7 +52,6 @@ steps:
       - buildkite-agent cache restore --name go_mod --name go_build
       - .buildkite/steps/check-code-generation.sh
       - buildkite-agent cache save --name go_mod --name go_build
-
 
   - label: ":helm: lint chart"
     key: helm-lint
