@@ -12,7 +12,6 @@ import (
 	"github.com/buildkite/agent-stack-k8s/v2/internal/controller/config"
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/yaml"
 )
 
@@ -1842,7 +1841,7 @@ func TestPipelineSigningOptions(t *testing.T) {
 		{
 			name: "verification key only",
 			agentConfig: &config.AgentConfig{
-				VerificationJWKSFile:   ptr.To("/path/to/verification.jwks"),
+				VerificationJWKSFile:   new("/path/to/verification.jwks"),
 				VerificationJWKSVolume: verificationVol,
 			},
 			wantPodVolumes:    []string{verificationVol.Name},
@@ -1858,7 +1857,7 @@ func TestPipelineSigningOptions(t *testing.T) {
 		{
 			name: "signing key only",
 			agentConfig: &config.AgentConfig{
-				SigningJWKSFile:   ptr.To("/path/to/signing.jwks"),
+				SigningJWKSFile:   new("/path/to/signing.jwks"),
 				SigningJWKSVolume: signingVol,
 			},
 			wantPodVolumes:    []string{signingVol.Name},
@@ -1874,9 +1873,9 @@ func TestPipelineSigningOptions(t *testing.T) {
 		{
 			name: "both keys",
 			agentConfig: &config.AgentConfig{
-				VerificationJWKSFile:   ptr.To("/verification/path/verification.jwks"),
+				VerificationJWKSFile:   new("/verification/path/verification.jwks"),
 				VerificationJWKSVolume: verificationVol,
-				SigningJWKSFile:        ptr.To("/signing/path/signing.jwks"),
+				SigningJWKSFile:        new("/signing/path/signing.jwks"),
 				SigningJWKSVolume:      signingVol,
 			},
 			wantPodVolumes: []string{verificationVol.Name, signingVol.Name},
@@ -1905,9 +1904,9 @@ func TestPipelineSigningOptions(t *testing.T) {
 			name: "relative paths",
 			agentConfig: &config.AgentConfig{
 				VerificationJWKSVolume: verificationVol,
-				VerificationJWKSFile:   ptr.To("my-awesome-key"),
+				VerificationJWKSFile:   new("my-awesome-key"),
 				SigningJWKSVolume:      signingVol,
-				SigningJWKSFile:        ptr.To("my-special-key"),
+				SigningJWKSFile:        new("my-special-key"),
 			},
 			wantPodVolumes: []string{verificationVol.Name, signingVol.Name},
 			wantAgentEnv: map[string]string{

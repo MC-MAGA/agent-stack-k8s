@@ -29,7 +29,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/selection"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/utils/ptr"
 	restconfig "sigs.k8s.io/controller-runtime/pkg/client/config"
 )
 
@@ -192,7 +191,7 @@ func (t testcase) createPipelineWithCleanup(ctx context.Context, queueName strin
 		Name:       t.PipelineName,
 		Repository: t.Repo,
 		ProviderSettings: &buildkite.GitHubSettings{
-			TriggerMode: ptr.To("none"),
+			TriggerMode: new("none"),
 		},
 		Configuration: steps.String(),
 		ClusterID:     t.ClusterUUID,

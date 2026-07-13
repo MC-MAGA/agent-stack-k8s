@@ -13,10 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/api/resource"
 )
 
-func ptr[T any](v T) *T {
-	return &v
-}
-
 func TestReadAndParseConfig(t *testing.T) {
 	expected := config.Config{
 		Debug:                                true,
@@ -76,7 +72,7 @@ func TestReadAndParseConfig(t *testing.T) {
 					VolumeClaimTemplate: &corev1.PersistentVolumeClaimTemplate{
 						Spec: corev1.PersistentVolumeClaimSpec{
 							AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
-							StorageClassName: ptr("my-special-storage-class"),
+							StorageClassName: new("my-special-storage-class"),
 							Resources: corev1.VolumeResourceRequirements{
 								Requests: corev1.ResourceList{
 									"storage": resource.MustParse("1Gi"),
@@ -88,7 +84,7 @@ func TestReadAndParseConfig(t *testing.T) {
 			},
 		},
 		AgentConfig: &config.AgentConfig{
-			Endpoint:             ptr("http://agent.buildkite.localhost/v3"),
+			Endpoint:             new("http://agent.buildkite.localhost/v3"),
 			AdditionalHooksPaths: []string{"/buildkite/baked-in-hooks"},
 			AdditionalHooks: []config.AdditionalHook{
 				{
@@ -100,7 +96,7 @@ func TestReadAndParseConfig(t *testing.T) {
 								LocalObjectReference: corev1.LocalObjectReference{
 									Name: "extra-hooks",
 								},
-								DefaultMode: ptr[int32](493),
+								DefaultMode: new(int32(493)),
 							},
 						},
 					},
@@ -151,7 +147,7 @@ func TestReadAndParseConfig(t *testing.T) {
 		},
 		PodSpecPatch: &corev1.PodSpec{
 			ServiceAccountName:           "buildkite-agent-sa",
-			AutomountServiceAccountToken: ptr(true),
+			AutomountServiceAccountToken: new(true),
 			NodeSelector: map[string]string{
 				"selectors.example.com/my-selector": "example-value",
 			},

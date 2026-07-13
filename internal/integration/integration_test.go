@@ -1119,7 +1119,7 @@ func TestHooksAndPlugins(t *testing.T) {
 				},
 			},
 		},
-		PluginsPath: ptr.To("/my/special/plugins"),
+		PluginsPath: new("/my/special/plugins"),
 		PluginsVolume: &corev1.Volume{
 			Name: "plugins",
 			VolumeSource: corev1.VolumeSource{

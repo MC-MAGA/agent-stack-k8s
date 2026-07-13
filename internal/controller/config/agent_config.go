@@ -5,7 +5,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/utils/ptr"
 
 	agentcore "github.com/buildkite/agent/v3/core"
 )
@@ -173,7 +172,7 @@ func (a *AgentConfig) ApplyToAgentStart(ctr *corev1.Container) {
 		// incremenetally adopt signed pipelines because signatures can be added
 		// from differently configured agents, but "block" mode means the agent
 		// rejects jobs with secrets if the key is missing.
-		a.VerificationFailureBehavior = ptr.To("warn")
+		a.VerificationFailureBehavior = new("warn")
 	}
 	setEnvOpt(ctr, "BUILDKITE_AGENT_JOB_VERIFICATION_NO_SIGNATURE_BEHAVIOR", a.VerificationFailureBehavior)
 }
@@ -212,7 +211,7 @@ func (a *AgentConfig) applyHooksVolumeTo(ctr *corev1.Container) {
 		return
 	}
 	if a.HooksPath == nil {
-		a.HooksPath = ptr.To("/workspace/hooks")
+		a.HooksPath = new("/workspace/hooks")
 	}
 	ctr.VolumeMounts = append(ctr.VolumeMounts, corev1.VolumeMount{
 		Name:      a.HooksVolume.Name,
@@ -254,7 +253,7 @@ func (a *AgentConfig) applyPluginsVolumeTo(ctr *corev1.Container) {
 		return
 	}
 	if a.PluginsPath == nil {
-		a.PluginsPath = ptr.To("/workspace/plugins")
+		a.PluginsPath = new("/workspace/plugins")
 	}
 	ctr.VolumeMounts = append(ctr.VolumeMounts, corev1.VolumeMount{
 		Name:      a.PluginsVolume.Name,
@@ -279,7 +278,7 @@ func (a *AgentConfig) applyPluginsVolumeTo(ctr *corev1.Container) {
 // directory.
 func normaliseJWKSFile(jwksFileField **string, defaultDir, defaultFile string) string {
 	if *jwksFileField == nil {
-		*jwksFileField = ptr.To(defaultFile)
+		*jwksFileField = new(defaultFile)
 	}
 	if filepath.IsAbs(**jwksFileField) {
 		return filepath.Dir(**jwksFileField)
