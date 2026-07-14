@@ -84,8 +84,11 @@ func TestReadAndParseConfig(t *testing.T) {
 			},
 		},
 		AgentConfig: &config.AgentConfig{
-			Endpoint:             new("http://agent.buildkite.localhost/v3"),
-			AdditionalHooksPaths: []string{"/buildkite/baked-in-hooks"},
+			Endpoint:                    new("http://agent.buildkite.localhost/v3"),
+			TracingBackend:              new("opentelemetry"),
+			TracingServiceName:          new("buildkite-agent"),
+			TracingPropagateTraceparent: new(true),
+			AdditionalHooksPaths:        []string{"/buildkite/baked-in-hooks"},
 			AdditionalHooks: []config.AdditionalHook{
 				{
 					Path: "/buildkite/extra-hooks",

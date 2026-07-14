@@ -429,6 +429,15 @@
             "trace-context-encoding": {
               "type": "string"
             },
+            "tracing-backend": {
+              "type": "string"
+            },
+            "tracing-service-name": {
+              "type": "string"
+            },
+            "tracing-propagate-traceparent": {
+              "type": "boolean"
+            },
             "disable-warnings-for": {
               "type": "array",
               "default": [],
