@@ -20,7 +20,7 @@ func NewGraphQLClient(bearer, endpoint string) graphql.Client {
 	if endpoint == "" {
 		endpoint = "https://graphql.buildkite.com/v1"
 	}
-	logger := slog.New(tint.NewHandler(os.Stdout, &tint.Options{
+	logger := slog.New(tint.NewTextHandler(os.Stdout, &tint.Options{
 		Level: slog.LevelDebug,
 	}))
 	logRequests := false // Change to true if you want request payloads logged in tests
