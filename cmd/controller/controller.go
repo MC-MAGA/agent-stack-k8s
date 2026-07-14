@@ -138,7 +138,7 @@ func runController(cfg *config.Config) error {
 		handler = slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})
 
 	case "logfmt", "":
-		handler = tint.NewHandler(os.Stdout, &tint.Options{
+		handler = tint.NewTextHandler(os.Stdout, &tint.Options{
 			AddSource: true,
 			Level:     level,
 			NoColor:   cfg.NoColor || !isatty.IsTerminal(os.Stdout.Fd()),
