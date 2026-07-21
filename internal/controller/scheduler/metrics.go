@@ -113,7 +113,7 @@ var (
 		Namespace: promNamespace,
 		Subsystem: "job_watcher",
 		Name:      "stalled_cleanup_skipped_total",
-		Help:      "Count of stalled job cleanups skipped because the Buildkite job was no longer in a pre-agent state",
+		Help:      "Count of stalled job cleanups skipped because an agent was working on the Buildkite job",
 	})
 
 	jobWatcherBuildkiteJobFailsCounter = promauto.NewCounter(prometheus.CounterOpts{

@@ -193,7 +193,7 @@ func (w *jobWatcher) checkFinished(ctx context.Context, log *slog.Logger, jobUUI
 	log.Info("The Kubernetes job ended without starting a pod. Failing the corresponding Buildkite job")
 	message := "The Kubernetes job ended without starting a pod.\n"
 	message += w.fetchEvents(ctx, log, kjob)
-	_ = w.failJob(ctx, log, kjob, message)
+	w.failJob(ctx, log, kjob, message)
 }
 
 // failBeforeAgentAcquire is called when a k8s Job has finished with a failed
@@ -219,7 +219,7 @@ func (w *jobWatcher) failBeforeAgentAcquire(ctx context.Context, log *slog.Logge
 	log.Info("Kubernetes pod failed before the buildkite-agent acquired the Buildkite job. Failing the BK job to release the reservation.", "bk_job_state", string(state.State))
 	message := "The Kubernetes pod failed before the buildkite-agent acquired this Buildkite job. The pod was likely killed by Kubernetes (eviction, OOM, node failure) or terminated externally before the agent could start.\n"
 	message += w.fetchEvents(ctx, log, kjob)
-	_ = w.failJob(ctx, log, kjob, message)
+	w.failJob(ctx, log, kjob, message)
 	w.ignoreJob(jobUUID)
 }
 
@@ -273,7 +273,7 @@ func (w *jobWatcher) fetchEvents(ctx context.Context, log *slog.Logger, kjob *ba
 	return w.formatEvents(evlist)
 }
 
-func (w *jobWatcher) failJob(ctx context.Context, log *slog.Logger, kjob *batchv1.Job, message string) error {
+func (w *jobWatcher) failJob(ctx context.Context, log *slog.Logger, kjob *batchv1.Job, message string) {
 	failureInfo := FailureInfo{
 		Message: message,
 		// We can know almost all failures triggered by job watcher are stack related error.
@@ -283,10 +283,9 @@ func (w *jobWatcher) failJob(ctx context.Context, log *slog.Logger, kjob *batchv
 		// Maybe the job was cancelled in the meantime?
 		log.Error("Could not fail Buildkite job", "error", err)
 		jobWatcherBuildkiteJobFailErrorsCounter.Inc()
-		return err
+		return
 	}
 	jobWatcherBuildkiteJobFailsCounter.Inc()
-	return nil
 }
 
 func (w *jobWatcher) formatEvents(evlist *corev1.EventList) string {
@@ -353,95 +352,95 @@ func (w *jobWatcher) stalledJobChecker(ctx context.Context) {
 			// continue below
 		}
 
-		// Gather stalled jobs
-		var stalled []*batchv1.Job
-		w.stallingJobsMu.Lock()
-		for jobUUID, kjob := range w.stallingJobs {
-			if time.Since(kjob.Status.StartTime.Time) < w.cfg.EmptyJobGracePeriod {
-				continue
-			}
+		w.cleanupStalledJobs(ctx)
+	}
+}
 
-			// ignore it from now until it is deleted
-			w.ignoreJob(jobUUID)
-
-			// Move it from w.stalling into stalled
-			stalled = append(stalled, kjob)
-			delete(w.stallingJobs, jobUUID)
+// cleanupStalledJobs runs one pass over the stalling jobs, cleaning up those
+// that have exceeded the grace period without starting a pod.
+func (w *jobWatcher) cleanupStalledJobs(ctx context.Context) {
+	// Gather jobs past the grace period. API calls happen after unlocking.
+	candidates := make(map[uuid.UUID]*batchv1.Job)
+	w.stallingJobsMu.Lock()
+	for jobUUID, kjob := range w.stallingJobs {
+		if time.Since(kjob.Status.StartTime.Time) < w.cfg.EmptyJobGracePeriod {
+			continue
 		}
-		w.stallingJobsMu.Unlock()
+		candidates[jobUUID] = kjob
+	}
+	w.stallingJobsMu.Unlock()
 
-		jobWatcherStalledWithoutPodCounter.Add(float64(len(stalled)))
+	var stalled []*batchv1.Job
+	for jobUUID, kjob := range candidates {
+		log := loggerForObject(w.logger, kjob)
 
-		// Fail BK jobs and delete k8s jobs.
-		for _, kjob := range stalled {
-			w.cleanupStalledJob(ctx, kjob)
+		// The informer cache may be stale — before doing anything destructive,
+		// ask Buildkite whether an agent is actually working on the job.
+		active, state, err := w.isJobActive(ctx, jobUUID)
+		switch {
+		case err != nil:
+			// Leave it in stallingJobs so the next cycle retries.
+			log.Warn("Failed to fetch BK job state; skipping stalled job cleanup to avoid killing a potentially running job", "error", err)
+			continue
+
+		case active:
+			// A pod must exist: the "stalled without pod" signal was a false
+			// positive from a stale informer cache. Once the cache catches
+			// up, the job leaves stallingJobs for good.
+			log.Info("Skipping stalled job cleanup: an agent is working on the Buildkite job (informer cache was likely stale)", "bk_job_state", string(state))
+			jobWatcherStalledCleanupSkippedCounter.Inc()
+			w.removeFromStalling(jobUUID)
+
+		default:
+			// The k8s Job is a zombie holding a slot: no pod after the grace
+			// period, and no agent working on the BK job. Two scenarios lead
+			// here:
+			// 1. The pod can't be scheduled (e.g. unsatisfiable constraints)
+			//    and the BK job hasn't started (reserved, scheduled).
+			// 2. The pod can't be scheduled, and the BK job was handled by
+			//    something else in the meantime and reached a terminal state
+			//    (canceled, expired, ...) or is no longer known to Buildkite.
+			// Reap it, and ignore it from now until it is deleted.
+			w.ignoreJob(jobUUID)
+			w.removeFromStalling(jobUUID)
+			stalled = append(stalled, kjob)
 		}
 	}
+
+	jobWatcherStalledWithoutPodCounter.Add(float64(len(stalled)))
+
+	// Fail BK jobs and delete k8s jobs.
+	for _, kjob := range stalled {
+		w.cleanupStalledJob(ctx, kjob)
+	}
+}
+
+// isJobActive reports whether an agent is actively working on the Buildkite
+// job, which implies a pod exists even if the informer cache says otherwise.
+// The job state is also returned for logging.
+func (w *jobWatcher) isJobActive(ctx context.Context, jobUUID uuid.UUID) (bool, api.JobState, error) {
+	state, _, err := w.agentClient.GetJobState(ctx, jobUUID.String())
+	if err != nil {
+		return false, "", err
+	}
+	switch state.State {
+	case api.JobStateAccepted, api.JobStateAssigned, api.JobStateRunning,
+		api.JobStateCanceling, api.JobStateTimingOut:
+		return true, state.State, nil
+	}
+	return false, state.State, nil
 }
 
 func (w *jobWatcher) cleanupStalledJob(ctx context.Context, kjob *batchv1.Job) {
 	log := loggerForObject(w.logger, kjob)
 
-	// Check BK job state before taking any destructive action.
-	// The informer cache may be stale — ask Buildkite directly.
-	jobUUID, err := jobUUIDForObject(kjob)
-	if err != nil {
-		log.Error("Job UUID label missing or invalid", "error", err)
-		return
-	}
-
-	state, _, err := w.agentClient.GetJobState(ctx, jobUUID.String())
-	if err != nil {
-		log.Warn("Failed to fetch BK job state; skipping stalled job cleanup to avoid killing a potentially running job", "error", err)
-		// Unignore so the stall-detection loop can retry on the next cycle.
-		w.unignoreJob(jobUUID)
-		return
-	}
-
-	// Only proceed if the job is still in a pre-agent state.
-	// If the agent has already acquired the job (Running, Accepted, etc.),
-	// the "stalled without pod" signal was a false positive from a stale cache.
-	//
-	// Unlike failBeforeAgentAcquire (which only acts on Reserved, because a
-	// Scheduled state there means BK reclaimed the reservation after a pod
-	// failure), this path handles the no-pod-ever case: the k8s Job exists
-	// but never created a pod. If the BK job reverted to Scheduled, there
-	// is still a zombie k8s Job consuming a slot that should be cleaned up.
-
-	// An empty state means the job UUID was not found in the API response
-	// (deleted, expired, or garbage-collected). Proceed with cleanup —
-	// an orphaned k8s Job whose BK job is gone is exactly what this
-	// cleanup should reap.
-	if state.State == "" {
-		log.Warn("BK job state is empty (job may have been deleted/expired); proceeding with cleanup")
-	} else if state.State != api.JobStateReserved && state.State != api.JobStateScheduled {
-		log.Info("Skipping stalled job cleanup: Buildkite job is no longer in a pre-agent state (informer cache was likely stale)", "bk_job_state", string(state.State))
-		jobWatcherStalledCleanupSkippedCounter.Inc()
-		return
-	}
-
 	// Fetch events for the failure message, and try to fail the job.
+	// failJob may fail (e.g. the BK job already finished); proceed anyway —
+	// the zombie k8s Job still needs to be reaped.
 	stallDuration := duration.HumanDuration(time.Since(kjob.Status.StartTime.Time))
 	message := fmt.Sprintf("The Kubernetes job spent %s without starting a pod.\n", stallDuration)
 	message += w.fetchEvents(ctx, log, kjob)
-	if err := w.failJob(ctx, log, kjob, message); err != nil {
-		// failJob failed — possibly a transient error, or the agent acquired
-		// the job in the narrow window since our last state check. Re-check
-		// before applying the destructive ActiveDeadlineSeconds patch.
-		recheck, _, recheckErr := w.agentClient.GetJobState(ctx, jobUUID.String())
-		if recheckErr != nil {
-			log.Warn("Failed to re-fetch BK job state after failJob error; aborting cleanup to avoid killing a potentially running job", "failJobError", err, "recheckError", recheckErr)
-			// Unignore so the stall-detection loop can retry on the next cycle.
-			w.unignoreJob(jobUUID)
-			return
-		}
-		if recheck.State != "" && recheck.State != api.JobStateReserved && recheck.State != api.JobStateScheduled {
-			log.Warn("Aborting stalled job cleanup: BK job state changed during cleanup", "failJobError", err, "bk_job_state", string(recheck.State))
-			jobWatcherStalledCleanupSkippedCounter.Inc()
-			return
-		}
-		log.Warn("Failed to fail BK job; proceeding with cleanup since job is still in pre-agent state", "error", err, "bk_job_state", string(recheck.State))
-	}
+	w.failJob(ctx, log, kjob, message)
 
 	// Use ActiveDeadlineSeconds to fail the job, which makes k8s delete the job
 	// in the future.

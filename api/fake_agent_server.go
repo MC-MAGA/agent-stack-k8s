@@ -42,9 +42,6 @@ type FakeAgentServer struct {
 	// JobStates maps job UUIDs to their state strings for GetJobStates.
 	JobStates map[string]string
 
-	// GetJobStateCalls records the job UUIDs from each GetJobStates call.
-	GetJobStateCalls [][]string
-
 	// GetJobStatesStatusCode configures the HTTP status code for GetJobStates.
 	// Default is 200.
 	GetJobStatesStatusCode int
@@ -58,11 +55,6 @@ type FakeAgentServer struct {
 	// FinishJobStatusCode configures the HTTP status code for FinishJob.
 	// Default is 200.
 	FinishJobStatusCode int
-
-	// OnFinishJob is an optional callback invoked after recording a FinishJob
-	// call but before sending the response. Useful for simulating state changes
-	// that happen between API calls (e.g., an agent acquiring a job).
-	OnFinishJob func(jobUUID string)
 
 	// FinishJobError configures an error message to return for FinishJob.
 	FinishJobError string
@@ -99,6 +91,21 @@ func (f *FakeAgentServer) Close() {
 	f.server.Close()
 }
 
+// writeJSONResponse encodes payload as JSON and writes it with the given
+// status code.
+func writeJSONResponse(w http.ResponseWriter, statusCode int, payload any) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
+		http.Error(w, "fake: failed to encode response: "+err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(statusCode)
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		log.Printf("fake: failed to write response: %v", err)
+	}
+}
+
 func (f *FakeAgentServer) handleRegisterStack(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -116,17 +123,7 @@ func (f *FakeAgentServer) handleRegisterStack(w http.ResponseWriter, r *http.Req
 		ClusterQueueKey: req.QueueKey,
 		Metadata:        req.Metadata,
 	}
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
-		http.Error(w, "fake: failed to encode response: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		log.Printf("fake: failed to write register stack response: %v", err)
-	}
+	writeJSONResponse(w, http.StatusOK, resp)
 }
 
 func (f *FakeAgentServer) handleReserveJobs(w http.ResponseWriter, r *http.Request) {
@@ -149,19 +146,7 @@ func (f *FakeAgentServer) handleReserveJobs(w http.ResponseWriter, r *http.Reque
 
 	// Return configured error if set
 	if f.ReserveError != "" {
-		var buf bytes.Buffer
-		if err := json.NewEncoder(&buf).Encode(map[string]string{
-			"message": f.ReserveError,
-		}); err != nil {
-			http.Error(w, "fake: failed to encode error response: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(f.ReserveStatusCode)
-		if _, err := w.Write(buf.Bytes()); err != nil {
-			log.Printf("fake: failed to write error response: %v", err)
-		}
+		writeJSONResponse(w, f.ReserveStatusCode, map[string]string{"message": f.ReserveError})
 		return
 	}
 
@@ -174,18 +159,7 @@ func (f *FakeAgentServer) handleReserveJobs(w http.ResponseWriter, r *http.Reque
 			NotReserved: []string{},
 		}
 	}
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
-		http.Error(w, "fake: failed to encode response: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(f.ReserveStatusCode)
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		log.Printf("fake: failed to write reserve jobs response: %v", err)
-	}
+	writeJSONResponse(w, f.ReserveStatusCode, resp)
 }
 
 func (f *FakeAgentServer) handleGetJobStates(w http.ResponseWriter, r *http.Request) {
@@ -203,23 +177,8 @@ func (f *FakeAgentServer) handleGetJobStates(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	f.mu.Lock()
-	f.GetJobStateCalls = append(f.GetJobStateCalls, req.JobUUIDs)
-
 	if f.GetJobStatesError != "" {
-		f.mu.Unlock()
-		var buf bytes.Buffer
-		if err := json.NewEncoder(&buf).Encode(map[string]string{
-			"message": f.GetJobStatesError,
-		}); err != nil {
-			http.Error(w, "fake: failed to encode error response: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(f.GetJobStatesStatusCode)
-		if _, err := w.Write(buf.Bytes()); err != nil {
-			log.Printf("fake: failed to write get job states error response: %v", err)
-		}
+		writeJSONResponse(w, f.GetJobStatesStatusCode, map[string]string{"message": f.GetJobStatesError})
 		return
 	}
 
@@ -229,23 +188,11 @@ func (f *FakeAgentServer) handleGetJobStates(w http.ResponseWriter, r *http.Requ
 			states[id] = s
 		}
 	}
-	f.mu.Unlock()
 
 	resp := struct {
 		States map[string]string `json:"states"`
 	}{States: states}
-
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(resp); err != nil {
-		http.Error(w, "fake: failed to encode response: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(f.GetJobStatesStatusCode)
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		log.Printf("fake: failed to write get job states response: %v", err)
-	}
+	writeJSONResponse(w, f.GetJobStatesStatusCode, resp)
 }
 
 func (f *FakeAgentServer) handleFinishJob(w http.ResponseWriter, r *http.Request) {
@@ -266,32 +213,13 @@ func (f *FakeAgentServer) handleFinishJob(w http.ResponseWriter, r *http.Request
 
 	f.mu.Lock()
 	f.FinishJobCalls = append(f.FinishJobCalls, jobUUID)
-	if f.OnFinishJob != nil {
-		f.OnFinishJob(jobUUID)
-	}
 	f.mu.Unlock()
 
 	if f.FinishJobError != "" {
-		var buf bytes.Buffer
-		if err := json.NewEncoder(&buf).Encode(map[string]string{
-			"message": f.FinishJobError,
-		}); err != nil {
-			http.Error(w, "fake: failed to encode error response: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(f.FinishJobStatusCode)
-		if _, err := w.Write(buf.Bytes()); err != nil {
-			log.Printf("fake: failed to write finish job error response: %v", err)
-		}
+		writeJSONResponse(w, f.FinishJobStatusCode, map[string]string{"message": f.FinishJobError})
 		return
 	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(f.FinishJobStatusCode)
-	if _, err := w.Write([]byte("{}\n")); err != nil {
-		log.Printf("fake: failed to write finish job response: %v", err)
-	}
+	writeJSONResponse(w, f.FinishJobStatusCode, struct{}{})
 }
 
 func (f *FakeAgentServer) handleNotifications(w http.ResponseWriter, r *http.Request) {
@@ -310,14 +238,5 @@ func (f *FakeAgentServer) handleNotifications(w http.ResponseWriter, r *http.Req
 	f.NotificationCalls = append(f.NotificationCalls, req.Notifications)
 	f.mu.Unlock()
 
-	var buf bytes.Buffer
-	if err := json.NewEncoder(&buf).Encode(stacksapi.CreateStackNotificationsResponse{}); err != nil {
-		http.Error(w, "fake: failed to encode response: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	if _, err := w.Write(buf.Bytes()); err != nil {
-		log.Printf("fake: failed to write notifications response: %v", err)
-	}
+	writeJSONResponse(w, http.StatusOK, stacksapi.CreateStackNotificationsResponse{})
 }
