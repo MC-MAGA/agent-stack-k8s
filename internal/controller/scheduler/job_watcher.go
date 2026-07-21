@@ -352,36 +352,91 @@ func (w *jobWatcher) stalledJobChecker(ctx context.Context) {
 			// continue below
 		}
 
-		// Gather stalled jobs
-		var stalled []*batchv1.Job
-		w.stallingJobsMu.Lock()
-		for jobUUID, kjob := range w.stallingJobs {
-			if time.Since(kjob.Status.StartTime.Time) < w.cfg.EmptyJobGracePeriod {
-				continue
-			}
+		w.cleanupStalledJobs(ctx)
+	}
+}
 
-			// ignore it from now until it is deleted
-			w.ignoreJob(jobUUID)
-
-			// Move it from w.stalling into stalled
-			stalled = append(stalled, kjob)
-			delete(w.stallingJobs, jobUUID)
+// cleanupStalledJobs runs one pass over the stalling jobs, cleaning up those
+// that have exceeded the grace period without starting a pod.
+func (w *jobWatcher) cleanupStalledJobs(ctx context.Context) {
+	// Gather jobs past the grace period. API calls happen after unlocking.
+	candidates := make(map[uuid.UUID]*batchv1.Job)
+	w.stallingJobsMu.Lock()
+	for jobUUID, kjob := range w.stallingJobs {
+		if time.Since(kjob.Status.StartTime.Time) < w.cfg.EmptyJobGracePeriod {
+			continue
 		}
-		w.stallingJobsMu.Unlock()
+		candidates[jobUUID] = kjob
+	}
+	w.stallingJobsMu.Unlock()
 
-		jobWatcherStalledWithoutPodCounter.Add(float64(len(stalled)))
+	var stalled []*batchv1.Job
+	for jobUUID, kjob := range candidates {
+		log := loggerForObject(w.logger, kjob)
 
-		// Fail BK jobs and delete k8s jobs.
-		for _, kjob := range stalled {
-			w.cleanupStalledJob(ctx, kjob)
+		// The informer cache may be stale — before doing anything destructive,
+		// ask Buildkite whether an agent is actually working on the job.
+		active, state, err := w.isJobActive(ctx, jobUUID)
+		switch {
+		case err != nil:
+			// Leave it in stallingJobs so the next cycle retries.
+			log.Warn("Failed to fetch BK job state; skipping stalled job cleanup to avoid killing a potentially running job", "error", err)
+			continue
+
+		case active:
+			// A pod must exist: the "stalled without pod" signal was a false
+			// positive from a stale informer cache. Once the cache catches
+			// up, the job leaves stallingJobs for good.
+			log.Info("Skipping stalled job cleanup: an agent is working on the Buildkite job (informer cache was likely stale)", "bk_job_state", string(state))
+			jobWatcherStalledCleanupSkippedCounter.Inc()
+			w.removeFromStalling(jobUUID)
+
+		default:
+			// The k8s Job is a zombie holding a slot: no pod after the grace
+			// period, and no agent working on the BK job. Two scenarios lead
+			// here:
+			// 1. The pod can't be scheduled (e.g. unsatisfiable constraints)
+			//    and the BK job hasn't started (reserved, scheduled).
+			// 2. The pod can't be scheduled, and the BK job was handled by
+			//    something else in the meantime and reached a terminal state
+			//    (canceled, expired, ...) or is no longer known to Buildkite.
+			// Reap it, and ignore it from now until it is deleted.
+			w.ignoreJob(jobUUID)
+			w.removeFromStalling(jobUUID)
+			stalled = append(stalled, kjob)
 		}
 	}
+
+	jobWatcherStalledWithoutPodCounter.Add(float64(len(stalled)))
+
+	// Fail BK jobs and delete k8s jobs.
+	for _, kjob := range stalled {
+		w.cleanupStalledJob(ctx, kjob)
+	}
+}
+
+// isJobActive reports whether an agent is actively working on the Buildkite
+// job, which implies a pod exists even if the informer cache says otherwise.
+// The job state is also returned for logging.
+func (w *jobWatcher) isJobActive(ctx context.Context, jobUUID uuid.UUID) (bool, api.JobState, error) {
+	state, _, err := w.agentClient.GetJobState(ctx, jobUUID.String())
+	if err != nil {
+		return false, "", err
+	}
+	switch state.State {
+	case api.JobStateAccepted, api.JobStateAssigned, api.JobStateRunning,
+		api.JobStateCanceling, api.JobStateTimingOut:
+		return true, state.State, nil
+	}
+	return false, state.State, nil
 }
 
 func (w *jobWatcher) cleanupStalledJob(ctx context.Context, kjob *batchv1.Job) {
 	log := loggerForObject(w.logger, kjob)
 
 	// Fetch events for the failure message, and try to fail the job.
+	// failJob may fail (e.g. the BK job already finished); proceed anyway —
+	// the zombie k8s Job still needs to be reaped.
 	stallDuration := duration.HumanDuration(time.Since(kjob.Status.StartTime.Time))
 	message := fmt.Sprintf("The Kubernetes job spent %s without starting a pod.\n", stallDuration)
 	message += w.fetchEvents(ctx, log, kjob)
