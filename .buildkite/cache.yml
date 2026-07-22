@@ -2,21 +2,21 @@ caches:
   - name: go_build
     cache_key:
       - agent: os
-      - {agent: arch, fallbackLimit: true}
+      - {agent: arch, fallback_limit: true}
       - checksum: go.mod
     target_paths:
       - /root/.cache/go-build
   - name: go_mod
     cache_key:
       - agent: os
-      - {agent: arch, fallbackLimit: true}
+      - {agent: arch, fallback_limit: true}
       - checksum: go.mod
     target_paths:
       - /root/.cache/go-mod
   - name: golangci_lint
     cache_key:
       - agent: os
-      - {agent: arch, fallbackLimit: true}
+      - {agent: arch, fallback_limit: true}
       - checksum: .golangci.yaml
     target_paths:
       - /root/.cache/golangci-lint
