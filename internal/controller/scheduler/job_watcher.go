@@ -228,13 +228,7 @@ func (w *jobWatcher) checkStalledWithoutPod(log *slog.Logger, jobUUID uuid.UUID,
 
 	// If the job is not finished and there is no pod, it should start one
 	// before too long. Otherwise the job is stalled.
-	pods := kjob.Status.Active + kjob.Status.Failed + kjob.Status.Succeeded
-	// Ready and Terminating are subsets of Active (I think)
-	if utp := kjob.Status.UncountedTerminatedPods; utp != nil {
-		pods += int32(len(utp.Succeeded))
-		pods += int32(len(utp.Failed))
-	}
-	if pods > 0 {
+	if hasPod(kjob) {
 		// All's well with the world.
 		w.removeFromStalling(jobUUID)
 		return
@@ -246,6 +240,24 @@ func (w *jobWatcher) checkStalledWithoutPod(log *slog.Logger, jobUUID uuid.UUID,
 	}
 
 	w.addToStalling(jobUUID, kjob)
+}
+
+// hasPod reports whether the job controller has ever observed a pod for the
+// k8s Job, in any lifecycle stage: pending/running (Active), terminating
+// (deletionTimestamp set but not yet terminal), or terminated — both
+// accounted (Succeeded, Failed) and not yet accounted
+// (UncountedTerminatedPods). False means the Job never produced a pod.
+// Ready is a subset of Active, so it is not summed.
+func hasPod(kjob *batchv1.Job) bool {
+	pods := kjob.Status.Active + kjob.Status.Failed + kjob.Status.Succeeded
+	if t := kjob.Status.Terminating; t != nil {
+		pods += *t
+	}
+	if utp := kjob.Status.UncountedTerminatedPods; utp != nil {
+		pods += int32(len(utp.Succeeded))
+		pods += int32(len(utp.Failed))
+	}
+	return pods > 0
 }
 
 func (w *jobWatcher) fetchEvents(ctx context.Context, log *slog.Logger, kjob *batchv1.Job) string {
@@ -341,6 +353,19 @@ func (w *jobWatcher) removeFromStalling(jobUUID uuid.UUID) {
 	delete(w.stallingJobs, jobUUID)
 }
 
+// removeCandidateFromStalling removes the stalling entry for jobUUID only if
+// it still refers to the same k8s Job as the checked candidate. An informer
+// event may have replaced the entry with a recreated Job (same deterministic
+// name, different UID) while the candidate was being checked against the
+// APIs; that replacement must stay and age through its own grace period.
+func (w *jobWatcher) removeCandidateFromStalling(jobUUID uuid.UUID, candidate *batchv1.Job) {
+	w.stallingJobsMu.Lock()
+	defer w.stallingJobsMu.Unlock()
+	if current, ok := w.stallingJobs[jobUUID]; ok && current.UID == candidate.UID {
+		delete(w.stallingJobs, jobUUID)
+	}
+}
+
 func (w *jobWatcher) stalledJobChecker(ctx context.Context) {
 	ticker := time.Tick(time.Second)
 	for {
@@ -374,22 +399,16 @@ func (w *jobWatcher) cleanupStalledJobs(ctx context.Context) {
 	for jobUUID, kjob := range candidates {
 		log := loggerForObject(w.logger, kjob)
 
-		// The informer cache may be stale — before doing anything destructive,
-		// ask Buildkite whether an agent is actually working on the job.
-		active, state, err := w.isJobActive(ctx, jobUUID)
+		reap, err := w.confirmStalled(ctx, log, jobUUID, kjob)
 		switch {
 		case err != nil:
 			// Leave it in stallingJobs so the next cycle retries.
-			log.Warn("Failed to fetch BK job state; skipping stalled job cleanup to avoid killing a potentially running job", "error", err)
 			continue
 
-		case active:
-			// A pod must exist: the "stalled without pod" signal was a false
-			// positive from a stale informer cache. Once the cache catches
-			// up, the job leaves stallingJobs for good.
-			log.Info("Skipping stalled job cleanup: an agent is working on the Buildkite job (informer cache was likely stale)", "bk_job_state", string(state))
-			jobWatcherStalledCleanupSkippedCounter.Inc()
-			w.removeFromStalling(jobUUID)
+		case !reap:
+			// A false positive from a stale informer cache. Once the cache
+			// catches up, the job leaves stallingJobs for good.
+			w.removeCandidateFromStalling(jobUUID, kjob)
 
 		default:
 			// The k8s Job is a zombie holding a slot: no pod after the grace
@@ -413,6 +432,59 @@ func (w *jobWatcher) cleanupStalledJobs(ctx context.Context) {
 	for _, kjob := range stalled {
 		w.cleanupStalledJob(ctx, kjob)
 	}
+}
+
+// confirmStalled reports whether a stall candidate is really stalled and
+// should be reaped. The informer cache may be stale, so before doing anything
+// destructive, double-check against two live sources:
+//   - Buildkite: an agent actively working on the job implies a pod exists.
+//   - The k8s API server: a pod may exist whose agent hasn't connected yet
+//     (e.g. still pulling a large image), or the Job may already be gone,
+//     leaving nothing to reap.
+//
+// An error means neither source could confirm the stall.
+func (w *jobWatcher) confirmStalled(ctx context.Context, log *slog.Logger, jobUUID uuid.UUID, kjob *batchv1.Job) (bool, error) {
+	active, state, err := w.isJobActive(ctx, jobUUID)
+	if err != nil {
+		log.Warn("Failed to fetch BK job state; skipping stalled job cleanup to avoid killing a potentially running job", "error", err)
+		return false, err
+	}
+	if active {
+		log.Info("Skipping stalled job cleanup: an agent is working on the Buildkite job (informer cache was likely stale)", "bk_job_state", string(state))
+		jobWatcherStalledCleanupSkippedCounter.WithLabelValues("agent_active").Inc()
+		return false, nil
+	}
+
+	job, err := w.k8s.BatchV1().Jobs(kjob.Namespace).Get(ctx, kjob.Name, metav1.GetOptions{})
+	if kerrors.IsNotFound(err) {
+		// There is no zombie k8s Job holding a slot, so there is nothing to
+		// reap. OnDelete tidies the bookkeeping, the deduper drops the UUID,
+		// and a still-scheduled BK job gets recreated from a later jobs
+		// query. Failing the BK job here would foreclose that retry.
+		log.Info("Skipping stalled job cleanup: the k8s Job no longer exists", "bk_job_state", string(state))
+		jobWatcherStalledCleanupSkippedCounter.WithLabelValues("job_gone").Inc()
+		return false, nil
+	}
+	if err != nil {
+		log.Warn("Failed to fetch job from the API server; skipping stalled job cleanup to avoid killing a potentially starting pod", "error", err)
+		return false, err
+	}
+	if job.UID != kjob.UID {
+		// Job names are deterministic per Buildkite job UUID: the candidate
+		// was deleted and a replacement Job was already created under the
+		// same name. Reaping the replacement with the old candidate's
+		// expired grace period would foreclose that retry.
+		log.Info("Skipping stalled job cleanup: the k8s Job was replaced by a newer Job with the same name", "bk_job_state", string(state))
+		jobWatcherStalledCleanupSkippedCounter.WithLabelValues("job_replaced").Inc()
+		return false, nil
+	}
+	if hasPod(job) {
+		log.Info("Skipping stalled job cleanup: the job has pods (informer cache was stale)", "bk_job_state", string(state))
+		jobWatcherStalledCleanupSkippedCounter.WithLabelValues("pod_exists").Inc()
+		return false, nil
+	}
+
+	return true, nil
 }
 
 // isJobActive reports whether an agent is actively working on the Buildkite
